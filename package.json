@@ -1,0 +1,92 @@
+{
+  "name": "storywriter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A local-first, Markdown-backed novel writing application.",
+  "license": "MIT",
+  "main": "out/main/index.js",
+  "build": {
+    "appId": "com.storywriter.app",
+    "productName": "Storywriter",
+    "directories": {
+      "buildResources": "build"
+    },
+    "extraResources": [
+      {
+        "from": "src/renderer/src/assets/fonts/literata/OFL.txt",
+        "to": "licenses/Literata-OFL.txt"
+      }
+    ],
+    "win": {
+      "icon": "icon.ico",
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "${productName}-${version}-windows-${arch}.${ext}"
+    },
+    "mac": {
+      "icon": "icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": null,
+      "hardenedRuntime": false,
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+    },
+    "linux": {
+      "icon": "icon.png",
+      "target": [
+        "AppImage"
+      ],
+      "category": "Office",
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
+    }
+  },
+  "scripts": {
+    "electron:install": "install-electron --no",
+    "predev": "npm run electron:install",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "dist:win": "npm run build && electron-builder --win --x64 --publish never",
+    "dist:mac:arm": "npm run build && electron-builder --mac --arm64 --publish never",
+    "dist:mac:universal": "npm run build && electron-builder --mac --universal --publish never",
+    "dist:linux": "npm run build && electron-builder --linux --x64 --publish never",
+    "prepreview": "npm run electron:install",
+    "preview": "electron-vite preview",
+    "check": "eslint ."
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/material": "^9.3.1",
+    "@mui/x-tree-view": "^9.11.0",
+    "@reduxjs/toolkit": "^2.12.0",
+    "@tiptap/core": "^3.30.1",
+    "@tiptap/react": "^3.30.1",
+    "@tiptap/starter-kit": "^3.30.1",
+    "font-list": "^2.1.0",
+    "openai": "^7.4.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
+    "react-redux": "^9.3.0",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "tiptap-pagination-plus": "^3.1.0",
+    "unified": "^11.0.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "eslint": "^10.8.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.4",
+    "globals": "^17.11.0",
+    "vite": "^7.3.6"
+  }
+}
