@@ -29,7 +29,11 @@ The release workflow produces:
 - macOS Universal (`.dmg` and `.zip`)
 - Linux x64 AppImage
 
-macOS builds are currently unsigned and not notarized. macOS will therefore display a security warning and may require the application to be opened explicitly from Finder or allowed in Privacy & Security settings.
+macOS builds are currently unsigned and not notarized. After copying the app to Applications, remove the quarantine attribute before opening it:
+
+```bash
+xattr -c /Applications/Storywriter.app
+```
 
 ## Installation
 
@@ -38,7 +42,7 @@ macOS builds are currently unsigned and not notarized. macOS will therefore disp
 Download the appropriate package from the repository's **Releases** page.
 
 - On Windows, run the installer.
-- On macOS, open the DMG and copy Storywriter to Applications. The first launch requires acknowledging the unsigned-app warning.
+- On macOS, open the DMG, copy Storywriter to Applications, then run `xattr -c /Applications/Storywriter.app` before opening it.
 - On Linux, mark the AppImage executable if necessary and run it:
 
   ```bash
