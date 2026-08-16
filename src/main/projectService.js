@@ -336,6 +336,52 @@ async function collectMarkdownFiles(directory = getActiveRoot()) {
   return files
 }
 
+const MAX_SEARCH_RESULTS = 250
+
+async function collectSearchableFiles(directory = getActiveRoot()) {
+  const files = []
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    if (entry.name.startsWith('.') || entry.name === 'node_modules') continue
+    const absolute = path.join(directory, entry.name)
+    if (entry.isDirectory()) {
+      files.push(...await collectSearchableFiles(absolute))
+      continue
+    }
+    const relative = normalizeRelative(path.relative(getActiveRoot(), absolute))
+    const searchable = entry.name.toLowerCase().endsWith('.md') || /^agents\/[^/]+\.json$/i.test(relative)
+    if (entry.isFile() && searchable) files.push({ absolute, relative })
+  }
+  return files
+}
+
+export async function searchProject(query) {
+  const value = String(query ?? '')
+  if (!value.trim()) return { query: value, matches: [], truncated: false }
+  if (value.length > 500) throw new Error('Search queries are limited to 500 characters.')
+
+  const needle = value.toLocaleLowerCase()
+  const matches = []
+  let truncated = false
+  for (const file of await collectSearchableFiles()) {
+    const lines = (await fs.readFile(file.absolute, 'utf8')).split(/\r\n|\n|\r/)
+    let occurrence = 0
+    for (let index = 0; index < lines.length; index += 1) {
+      const haystack = lines[index].toLocaleLowerCase()
+      const firstMatch = haystack.indexOf(needle)
+      if (firstMatch === -1) continue
+      const matchCount = haystack.split(needle).length - 1
+      matches.push({ path: file.relative, line: index + 1, text: lines[index], occurrence: occurrence + 1 })
+      occurrence += matchCount
+      if (matches.length >= MAX_SEARCH_RESULTS) {
+        truncated = true
+        break
+      }
+    }
+    if (truncated) break
+  }
+  return { query: value, matches, truncated }
+}
+
 async function rewriteRelativeLinks(oldRelative, newRelative) {
   const oldPath = normalizeRelative(oldRelative)
   const newPath = normalizeRelative(newRelative)

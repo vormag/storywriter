@@ -25,6 +25,7 @@ import {
   readDocument,
   refreshProject,
   renameEntry,
+  searchProject,
   updateProjectTypography,
   updateWorkspacePreferences,
   writeDocument
@@ -65,6 +66,7 @@ function registerIpc() {
   ipcMain.handle('project:openPath', (_event, root) => activateProject(root))
   ipcMain.handle('project:create', (_event, title) => chooseAndCreateProject(mainWindow, title))
   ipcMain.handle('project:refresh', () => refreshProject())
+  ipcMain.handle('project:search', (_event, query) => searchProject(query))
   ipcMain.handle('workspace:update', (_event, payload) => updateWorkspacePreferences(payload))
   ipcMain.handle('project:updateTypography', (_event, payload) => updateProjectTypography(payload))
   ipcMain.handle('git:run', (_event, payload) => runGit(payload))

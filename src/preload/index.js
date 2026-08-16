@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('storywriter', {
   openProjectPath: root => ipcRenderer.invoke('project:openPath', root),
   createProject: title => ipcRenderer.invoke('project:create', title),
   refreshProject: () => ipcRenderer.invoke('project:refresh'),
+  searchProject: query => ipcRenderer.invoke('project:search', query),
   updateWorkspace: payload => ipcRenderer.invoke('workspace:update', payload),
   updateProjectTypography: payload => ipcRenderer.invoke('project:updateTypography', payload),
   runGit: payload => ipcRenderer.invoke('git:run', payload),

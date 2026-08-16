@@ -13,6 +13,8 @@ const TOOL_NAMES = new Set([
   'read',
   'write_story',
   'write_lore',
+  'edit_story',
+  'edit_lore',
   'add_timeline_event',
   'remove_timeline_event',
   'edit_timeline_event',
@@ -118,18 +120,28 @@ const DEFINITIONS = {
     start_line: { type: 'integer', minimum: 1, description: 'First line to read, inclusive.' },
     end_line: { type: 'integer', minimum: 1, description: `Last line to read, inclusive. At most ${MAX_READ_LINES} lines per call.` }
   }, ['path', 'start_line', 'end_line']),
-  write_story: tool('write_story', 'Create a chapter or replace all or a line range in an existing story chapter. For a new file, content becomes the complete file and line fields are ignored. For an existing file, omit both line fields to replace the whole file. To insert before a line, set end_line to start_line - 1.', {
+  write_story: tool('write_story', 'Create a chapter, or replace the complete contents of an existing chapter only when overwrite is true. Use edit_story for a targeted change.', {
     path: { type: 'string', description: 'Path matching story/chapter_{number}.md.' },
     content: { type: 'string', description: 'Markdown content to write.' },
-    start_line: { type: 'integer', minimum: 1, description: 'Optional first line of an inclusive replacement.' },
-    end_line: { type: 'integer', minimum: 0, description: 'Optional last line of an inclusive replacement.' }
+    overwrite: { type: 'boolean', description: 'Set to true only to replace an existing file. Defaults to false.' }
   }, ['path', 'content']),
-  write_lore: tool('write_lore', 'Create a lore page or replace all or a line range in an existing lore file. For a new file, content becomes the complete file and line fields are ignored. For an existing file, omit both line fields to replace the whole file. To insert before a line, set end_line to start_line - 1.', {
+  write_lore: tool('write_lore', 'Create a lore page, or replace the complete contents of an existing page only when overwrite is true. Use edit_lore for a targeted change.', {
     path: { type: 'string', description: 'Markdown path inside lore.' },
     content: { type: 'string', description: 'Markdown content to write.' },
-    start_line: { type: 'integer', minimum: 1, description: 'Optional first line of an inclusive replacement.' },
-    end_line: { type: 'integer', minimum: 0, description: 'Optional last line of an inclusive replacement.' }
+    overwrite: { type: 'boolean', description: 'Set to true only to replace an existing file. Defaults to false.' }
   }, ['path', 'content']),
+  edit_story: tool('edit_story', 'Replace exact existing text in a story chapter. Read the file first and copy old_text exactly, including whitespace and newlines. Fails if old_text is absent or ambiguous unless replace_all is true.', {
+    path: { type: 'string', description: 'Path matching story/chapter_{number}.md.' },
+    old_text: { type: 'string', description: 'Exact text to replace, copied from the current file. Cannot be empty.' },
+    new_text: { type: 'string', description: 'Replacement text; may be empty to delete old_text.' },
+    replace_all: { type: 'boolean', description: 'Replace every non-overlapping occurrence. Defaults to false.' }
+  }, ['path', 'old_text', 'new_text']),
+  edit_lore: tool('edit_lore', 'Replace exact existing text in a lore page. Read the file first and copy old_text exactly, including whitespace and newlines. Fails if old_text is absent or ambiguous unless replace_all is true.', {
+    path: { type: 'string', description: 'Markdown path inside lore.' },
+    old_text: { type: 'string', description: 'Exact text to replace, copied from the current file. Cannot be empty.' },
+    new_text: { type: 'string', description: 'Replacement text; may be empty to delete old_text.' },
+    replace_all: { type: 'boolean', description: 'Replace every non-overlapping occurrence. Defaults to false.' }
+  }, ['path', 'old_text', 'new_text']),
   add_timeline_event: tool('add_timeline_event', 'Add an event to TIMELINE.md and automatically order events by date and optional time.', {
     date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'Required calendar date in YYYY-MM-DD format.' },
     time: { type: 'string', pattern: '^(?:[01]\\d|2[0-3]):[0-5]\\d$', description: 'Optional 24-hour time in HH:mm format.' },
@@ -201,7 +213,8 @@ async function findText(args) {
 
 async function readRange(args) {
   const relative = markdownPath(args.path)
-  const lines = contentLines(await fs.readFile(resolveProjectPath(relative), 'utf8'))
+  const content = await fs.readFile(resolveProjectPath(relative), 'utf8')
+  const lines = content.match(/.*?(?:\r\n|\n|\r|$)/g)?.filter(line => line) ?? []
   const start = Number(args.start_line)
   const requestedEnd = Number(args.end_line)
   if (!Number.isInteger(start) || !Number.isInteger(requestedEnd) || requestedEnd < start) {
@@ -212,7 +225,7 @@ async function readRange(args) {
   const end = Math.min(requestedEnd, lines.length)
   return {
     path: relative,
-    content: lines.slice(start - 1, end).join('\n'),
+    content: lines.slice(start - 1, end).join(''),
     metadata: { startLine: start, endLine: end, totalLines: lines.length }
   }
 }
@@ -221,24 +234,36 @@ async function writeMarkdown(args, scope) {
   const relative = scope === 'story' ? storyPath(args.path) : markdownPath(args.path, ['lore'])
   const target = resolveProjectPath(relative)
   const exists = await pathExists(target)
-  const hasStart = args.start_line !== undefined
-  const hasEnd = args.end_line !== undefined
-  if (exists && hasStart !== hasEnd) throw new Error('Provide both start_line and end_line, or neither.')
-
-  let nextContent = String(args.content ?? '').replaceAll('\r\n', '\n')
-  if (exists && hasStart) {
-    const currentLines = contentLines(await fs.readFile(target, 'utf8'))
-    const start = Number(args.start_line)
-    const end = Number(args.end_line)
-    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start - 1 || end > currentLines.length || start > currentLines.length + 1) {
-      throw new Error(`Invalid replacement range for a file with ${currentLines.length} lines.`)
-    }
-    currentLines.splice(start - 1, end - start + 1, ...contentLines(nextContent))
-    nextContent = currentLines.length ? `${currentLines.join('\n')}\n` : ''
-  }
+  if (exists && args.overwrite !== true) throw new Error(`File already exists: ${relative}. Set overwrite to true to replace it, or use the edit tool for a targeted change.`)
+  const nextContent = String(args.content ?? '')
   await atomicWrite(target, nextContent)
   notify('project-changed', { path: relative })
   return { path: relative, created: !exists, metadata: { totalLines: contentLines(nextContent).length } }
+}
+
+async function editMarkdown(args, scope) {
+  const relative = scope === 'story' ? storyPath(args.path) : markdownPath(args.path, ['lore'])
+  const target = resolveProjectPath(relative)
+  if (!await pathExists(target)) throw new Error(`File not found: ${relative}. Use the write tool to create it.`)
+
+  const oldText = String(args.old_text ?? '')
+  const newText = String(args.new_text ?? '')
+  if (!oldText) throw new Error('old_text cannot be empty.')
+  const content = await fs.readFile(target, 'utf8')
+  const firstMatch = content.indexOf(oldText)
+  if (firstMatch === -1) throw new Error('old_text was not found. Read the file again and copy the target text exactly.')
+  const secondMatch = content.indexOf(oldText, firstMatch + oldText.length)
+  const replaceAll = args.replace_all === true
+  if (!replaceAll && secondMatch !== -1) {
+    throw new Error('old_text occurs multiple times. Provide more surrounding text or set replace_all to true.')
+  }
+
+  const nextContent = replaceAll
+    ? content.split(oldText).join(newText)
+    : `${content.slice(0, firstMatch)}${newText}${content.slice(firstMatch + oldText.length)}`
+  await atomicWrite(target, nextContent)
+  notify('project-changed', { path: relative })
+  return { path: relative, metadata: { replacements: replaceAll ? content.split(oldText).length - 1 : 1, totalLines: contentLines(nextContent).length } }
 }
 
 function splitTableRow(line) {
@@ -410,6 +435,8 @@ const HANDLERS = {
   read: readRange,
   write_story: args => writeMarkdown(args, 'story'),
   write_lore: args => writeMarkdown(args, 'lore'),
+  edit_story: args => editMarkdown(args, 'story'),
+  edit_lore: args => editMarkdown(args, 'lore'),
   add_timeline_event: addTimelineEvent,
   remove_timeline_event: removeTimelineEvent,
   edit_timeline_event: editTimelineEvent,

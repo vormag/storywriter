@@ -115,6 +115,153 @@ function TextDialog({ dialog, loreFolders, onClose, onSubmit }) {
   )
 }
 
+function localSearch(content, query) {
+  const needle = String(query || '').toLocaleLowerCase()
+  if (!needle) return []
+  let occurrence = 0
+  return String(content || '').split(/\r\n|\n|\r/).flatMap((text, index) => {
+    const haystack = text.toLocaleLowerCase()
+    const firstMatch = haystack.indexOf(needle)
+    if (firstMatch === -1) return []
+    const matchCount = haystack.split(needle).length - 1
+    const result = { line: index + 1, text, occurrence: occurrence + 1 }
+    occurrence += matchCount
+    return [result]
+  })
+}
+
+function SearchPopup({ scope, filePath, content, onClose, onOpenResult }) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState([])
+  const [resultQuery, setResultQuery] = useState('')
+  const [truncated, setTruncated] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
+  const [hasNavigated, setHasNavigated] = useState(false)
+  const inputRef = useRef(null)
+  const onOpenResultRef = useRef(onOpenResult)
+
+  useEffect(() => {
+    onOpenResultRef.current = onOpenResult
+  }, [onOpenResult])
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => inputRef.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [])
+
+  useEffect(() => {
+    const value = query.trim()
+    if (!value) {
+      setResults([])
+      setResultQuery('')
+      setTruncated(false)
+      setActiveIndex(0)
+      setHasNavigated(false)
+      return undefined
+    }
+    let active = true
+    setResults([])
+    setResultQuery('')
+    setTruncated(false)
+    setActiveIndex(0)
+    setHasNavigated(false)
+    const timer = window.setTimeout(async () => {
+      setBusy(true)
+      try {
+        const response = scope === 'project'
+          ? await window.storywriter.searchProject(value)
+          : { matches: localSearch(content, value), truncated: false }
+        if (!active) return
+        setResults(response.matches)
+        setResultQuery(value)
+        setTruncated(Boolean(response.truncated))
+        setActiveIndex(0)
+        setHasNavigated(false)
+      } catch {
+        if (active) setResults([])
+      } finally {
+        if (active) setBusy(false)
+      }
+    }, 120)
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+    }
+  }, [content, query, scope])
+
+  useEffect(() => {
+    const result = results[activeIndex]
+    if (!hasNavigated || !result || resultQuery !== query.trim()) return
+    onOpenResultRef.current({ ...result, path: result.path || filePath, query })
+  }, [activeIndex, filePath, hasNavigated, query, resultQuery, results])
+
+  const move = direction => {
+    if (!results.length) return
+    if (!hasNavigated) {
+      setActiveIndex(direction > 0 ? 0 : results.length - 1)
+      setHasNavigated(true)
+      inputRef.current?.focus()
+      return
+    }
+    setActiveIndex(index => (index + direction + results.length) % results.length)
+    inputRef.current?.focus()
+  }
+
+  const title = scope === 'project' ? 'Search everywhere' : 'Find in document'
+  const activeResult = hasNavigated ? results[activeIndex] : null
+  return (
+    <Box
+      role="search"
+      aria-label={title}
+      sx={{
+        position: 'fixed',
+        top: 46,
+        left: '50%',
+        zIndex: theme => theme.zIndex.modal + 1,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 0.5,
+        width: 'min(560px, calc(100vw - 32px))',
+        p: 0.75,
+        bgcolor: 'background.paper',
+        border: 1,
+        borderColor: 'divider',
+        borderRadius: 1.5,
+        boxShadow: 8,
+        transform: 'translateX(-50%)'
+      }}
+    >
+        <TextField
+          autoFocus
+          inputRef={inputRef}
+          size="small"
+          sx={{ flex: 1 }}
+          placeholder={scope === 'project' ? 'Search everywhere' : `Find in ${filePath || 'document'}`}
+          value={query}
+          onChange={event => setQuery(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === 'Escape') onClose()
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              move(event.shiftKey ? -1 : 1)
+            }
+          }}
+          inputProps={{ 'aria-label': title }}
+        />
+        <Typography variant="caption" color="text.secondary" sx={{ minWidth: 52, textAlign: 'center', whiteSpace: 'nowrap' }}>
+          {busy ? '…' : `${hasNavigated ? activeIndex + 1 : 0}/${results.length}${truncated ? '+' : ''}`}
+        </Typography>
+        <Tooltip title="Previous result (Shift+Enter)"><span><IconButton size="small" disabled={!results.length} onClick={() => move(-1)}>‹</IconButton></span></Tooltip>
+        <Tooltip title="Next result (Enter)"><span><IconButton size="small" disabled={!results.length} onClick={() => move(1)}>›</IconButton></span></Tooltip>
+        <Tooltip title="Close (Esc)"><IconButton size="small" onClick={onClose}>×</IconButton></Tooltip>
+        {activeResult && <Typography variant="caption" color="text.secondary" sx={{ position: 'absolute', top: '100%', left: 8, mt: 0.5, px: 0.75, py: 0.25, bgcolor: 'background.paper', borderRadius: 0.75, boxShadow: 1 }}>
+          {activeResult.path || filePath} · line {activeResult.line}
+        </Typography>}
+    </Box>
+  )
+}
+
 export default function App({ themeMode, onThemeToggle }) {
   const dispatch = useDispatch()
   const workspace = useSelector(state => state.workspace)
@@ -126,6 +273,7 @@ export default function App({ themeMode, onThemeToggle }) {
   const [aiConfigured, setAiConfigured] = useState(null)
   const [selectionRequest, setSelectionRequest] = useState(null)
   const [editorSelection, setEditorSelection] = useState(null)
+  const [searchScope, setSearchScope] = useState(null)
   const [documentRevision, setDocumentRevision] = useState(0)
   const [resizingPanel, setResizingPanel] = useState(null)
   const viewSaveTimerRef = useRef(null)
@@ -178,6 +326,26 @@ export default function App({ themeMode, onThemeToggle }) {
 
   useEffect(() => {
     if (!workspace.project) return undefined
+    const handleShortcut = async event => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLowerCase() !== 'f') return
+      event.preventDefault()
+      if (event.shiftKey) {
+        try {
+          if (workspace.dirty) await dispatch(saveActiveDocument()).unwrap()
+          setSearchScope('project')
+        } catch (error) {
+          setNotice(error.message || 'Could not save before searching.')
+        }
+      } else if (workspace.activePath) {
+        setSearchScope('document')
+      }
+    }
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
+  }, [dispatch, workspace.activePath, workspace.dirty])
+
+  useEffect(() => {
+    if (!workspace.project) return undefined
     const unsubscribeChanged = window.storywriter.onAiProjectChanged(async payload => {
       try {
         await dispatch(refreshProject()).unwrap()
@@ -207,7 +375,23 @@ export default function App({ themeMode, onThemeToggle }) {
   const openDocument = async path => {
     if (path === workspace.activePath) return
     if (workspace.dirty) await dispatch(saveActiveDocument()).unwrap()
-    dispatch(loadDocument(path))
+    return dispatch(loadDocument(path)).unwrap()
+  }
+
+  const openSearchResult = async result => {
+    try {
+      if (result.path !== workspace.activePath) await openDocument(result.path)
+      setSelectionRequest({
+        path: result.path,
+        text: result.query,
+        occurrence: result.occurrence || 1,
+        caseInsensitive: true,
+        focus: false,
+        requestId: Date.now()
+      })
+    } catch (error) {
+      setNotice(error.message || 'Could not open the search result.')
+    }
   }
 
   const navigateLink = async (href, sourcePath = '') => {
@@ -521,6 +705,7 @@ export default function App({ themeMode, onThemeToggle }) {
       </Box>
 
       {textDialog && <TextDialog key={`${textDialog.type}-${textDialog.initial || ''}`} dialog={textDialog} loreFolders={lore.folders} onClose={() => setTextDialog(null)} onSubmit={submitTextDialog} />}
+      {searchScope && <SearchPopup scope={searchScope} filePath={workspace.activePath} content={workspace.content} onClose={() => setSearchScope(null)} onOpenResult={openSearchResult} />}
       <Dialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
         <DialogTitle>Delete {deleteTarget?.label}?</DialogTitle>
         <DialogContent><DialogContentText>This removes the item from disk. A lore category also removes everything inside it.</DialogContentText></DialogContent>

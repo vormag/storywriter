@@ -307,18 +307,31 @@ export default function DocumentEditor({
     let match = -1
     let offset = 0
     const occurrence = Math.max(1, Number(selectionRequest.occurrence) || 1)
+    const searchText = selectionRequest.caseInsensitive ? text.toLocaleLowerCase() : text
+    const searchableText = selectionRequest.caseInsensitive ? flatText.toLocaleLowerCase() : flatText
     for (let index = 0; index < occurrence; index += 1) {
-      match = flatText.indexOf(text, offset)
+      match = searchableText.indexOf(searchText, offset)
       if (match < 0) return
       offset = match + text.length
     }
     const selectedPositions = flatPositions.slice(match, match + text.length).filter(Number.isInteger)
     if (!selectedPositions.length) return
-    editor.chain()
-      .focus()
+    const chain = editor.chain()
+    if (selectionRequest.focus !== false) chain.focus()
+    chain
       .setTextSelection({ from: selectedPositions[0], to: selectedPositions.at(-1) + 1 })
       .scrollIntoView()
       .run()
+    if (selectionRequest.focus === false) {
+      window.requestAnimationFrame(() => {
+        if (editor.isDestroyed) return
+        const position = editor.view.domAtPos(selectedPositions[0])
+        const target = position.node.nodeType === Node.TEXT_NODE
+          ? position.node.parentElement
+          : position.node instanceof Element ? position.node : null
+        target?.scrollIntoView({ block: 'center', inline: 'nearest' })
+      })
+    }
   }, [editor, filePath, selectionRequest])
 
   useEffect(() => {

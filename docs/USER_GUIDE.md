@@ -151,6 +151,8 @@ If a system font is unavailable on another computer, the editor falls back to an
 
 - **B** or `Ctrl+B` / `Cmd+B`: bold
 - **I** or `Ctrl+I` / `Cmd+I`: italic
+- `Ctrl+F` / `Cmd+F`: find text in the current document
+- `Ctrl+Shift+F` / `Cmd+Shift+F`: search all project documents
 - **H1**, **H2**, **H3**: toggle headings
 - **↶**, **↷**: undo and redo
 - **↵**: insert an explicit page break
@@ -161,6 +163,8 @@ An explicit page break is stored as:
 ```markdown
 <!-- pagebreak -->
 ```
+
+Search opens in a compact bar at the top of the window and is case-insensitive. Use **‹** / **›**, `Shift+Enter`, or `Enter` to move between results; the bar shows the current position and total result count. Project search includes chapters, lore, the timeline, and agent configurations.
 
 ### Links
 
@@ -293,16 +297,18 @@ Tools are granted per agent:
 | --- | --- |
 | `list` | List files and folders under `story/` or `lore/`. |
 | `find` | Search literal text across story and lore files. |
-| `read` | Read up to 500 lines from a requested line range; returns total line count. |
-| `write_story` | Create chapters or replace whole/ranged content in story files. |
-| `write_lore` | Create lore pages or replace whole/ranged content in lore files. |
+| `read` | Read up to 500 requested lines exactly as stored, including blank lines and line endings; returns total line count. |
+| `write_story` | Create chapters, or replace an entire existing chapter only with `overwrite: true`. |
+| `write_lore` | Create lore pages, or replace an entire existing page only with `overwrite: true`. |
+| `edit_story` | Replace exact text in an existing story chapter. Ambiguous matches fail unless `replace_all: true`. |
+| `edit_lore` | Replace exact text in an existing lore page. Ambiguous matches fail unless `replace_all: true`. |
 | `add_timeline_event` | Add and sort a timeline event. |
 | `remove_timeline_event` | Remove the single event matching an exact event name. |
 | `edit_timeline_event` | Edit an exact event and sort the result. |
 | `select_range` | Open a story/lore file and select an exact visible text occurrence. |
 | `get_summary` | Generate or return a cached file summary. |
 
-Write tools are constrained to their respective project folders. Story files created by AI must follow `story/chapter_<number>.md`. File paths are validated against traversal outside the project.
+Write tools are constrained to their respective project folders. Story files created by AI must follow `story/chapter_<number>.md`. File paths are validated against traversal outside the project. For targeted changes, the assistant must use an edit tool with exact `old_text` and `new_text`; the edit fails if the copied old text is missing or occurs more than once, unless it explicitly sets `replace_all`.
 
 After a write tool runs, the project tree refreshes. If the changed file is open, the editor reloads it. Unsaved local changes are saved before sending a message, but you should still review and commit before broad AI editing tasks.
 

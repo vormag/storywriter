@@ -16,6 +16,8 @@ const AVAILABLE_TOOLS = [
   ['read', 'Read files'],
   ['write_story', 'Write story'],
   ['write_lore', 'Write lore'],
+  ['edit_story', 'Edit story'],
+  ['edit_lore', 'Edit lore'],
   ['add_timeline_event', 'Add timeline events'],
   ['remove_timeline_event', 'Remove timeline events'],
   ['edit_timeline_event', 'Edit timeline events'],
