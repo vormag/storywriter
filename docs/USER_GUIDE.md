@@ -307,6 +307,7 @@ Tools are granted per agent:
 | `edit_timeline_event` | Edit an exact event and sort the result. |
 | `select_range` | Open a story/lore file and select an exact visible text occurrence. |
 | `get_summary` | Generate or return a cached file summary. |
+| `view_image` | Inspect an image under `assets/` and return a concise visual description. |
 
 Write tools are constrained to their respective project folders. Story files created by AI must follow `story/chapter_<number>.md`. File paths are validated against traversal outside the project. For targeted changes, the assistant must use an edit tool with exact `old_text` and `new_text`; the edit fails if the copied old text is missing or occurs more than once, unless it explicitly sets `replace_all`.
 

@@ -11,6 +11,41 @@ import { normalizeRelative, validateConversationId } from './utils.js'
 
 const REASONING_LEVELS = new Set(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
 
+function summarizeToolCall(name, args, output) {
+  const result = output?.result || {}
+  const path = result.path || normalizeRelative(args?.path) || 'unknown file'
+  if (!output?.ok) return `Tool failed: ${name}`
+
+  switch (name) {
+    case 'write_story':
+    case 'write_lore':
+      return result.created ? `Created file ${path}` : `Replaced file ${path}`
+    case 'edit_story':
+    case 'edit_lore':
+      return `Edited file ${path}`
+    case 'read':
+      return `Read file ${path}`
+    case 'list':
+      return `Listed ${result.directory || normalizeRelative(args?.directory)}`
+    case 'find':
+      return `Searched files for "${String(args?.query ?? '').slice(0, 60)}"`
+    case 'add_timeline_event':
+      return `Added timeline event "${String(args?.event ?? '').slice(0, 60)}"`
+    case 'remove_timeline_event':
+      return `Removed timeline event "${String(args?.event ?? '').slice(0, 60)}"`
+    case 'edit_timeline_event':
+      return `Edited timeline event "${String(args?.event ?? '').slice(0, 60)}"`
+    case 'select_range':
+      return `Selected text in ${path}`
+    case 'get_summary':
+      return `Summarized file ${path}`
+    case 'view_image':
+      return `Viewed image ${path}`
+    default:
+      return `Used tool ${name}`
+  }
+}
+
 function buildEditorContext(value) {
   const activeFile = normalizeRelative(value?.activeFile)
   const selectedText = String(value?.selectedText ?? '').trim().slice(0, 50000)
@@ -27,7 +62,18 @@ export async function getAiStatus() {
   return getOpenAiStatus()
 }
 
-export async function sendAiMessage(payload = {}) {
+function createResponseParams({ model, reasoning, instructions, editorContext, input, tools }) {
+  return {
+    model,
+    reasoning: { effort: reasoning },
+    instructions: [instructions, editorContext].filter(Boolean).join('\n\n'),
+    input,
+    tools: tools.length ? tools : undefined,
+    store: false
+  }
+}
+
+export async function sendAiMessage(payload = {}, options = {}) {
   const apiKey = await getOpenAiKey()
   if (!apiKey) throw new Error('No OpenAI API key is configured.')
 
@@ -62,33 +108,49 @@ export async function sendAiMessage(payload = {}) {
   const tools = getAiToolDefinitions(agent.tools)
   const enabledTools = new Set(tools.map(tool => tool.name))
   const input = [...history, { role: 'user', content: message }]
+  const toolEvents = []
+  let text = ''
+  const emit = typeof options.onEvent === 'function' ? options.onEvent : () => {}
 
   for (let turn = 0; turn < 50; turn += 1) {
-    const response = await client.responses.create({
-      model,
-      reasoning: { effort: reasoning },
-      instructions: [instructions, editorContext].filter(Boolean).join('\n\n'),
-      input,
-      tools: tools.length ? tools : undefined,
-      store: false
+    const stream = await client.responses.create({
+      ...createResponseParams({ model, reasoning, instructions, editorContext, input, tools }),
+      stream: true
     })
+    let response = null
+
+    for await (const event of stream) {
+      if (event.type === 'response.output_text.delta' && event.delta) {
+        text += event.delta
+        emit({ type: 'delta', text: event.delta })
+      } else if (event.type === 'response.completed') {
+        response = event.response
+      }
+    }
+    if (!response) throw new Error('OpenAI stream ended without a completed response.')
+
     const calls = response.output.filter(item => item.type === 'function_call')
     if (!calls.length) {
-      const text = response.output_text?.trim()
-      if (!text) throw new Error('OpenAI returned an empty response.')
-      return { text, model }
+      text = text || response.output_text || ''
+      if (!text.trim()) throw new Error('OpenAI returned an empty response.')
+      emit({ type: 'done', text })
+      return { text: text.trim(), model, toolEvents }
     }
 
     input.push(...response.output)
     for (const call of calls) {
       let output
+      let args = {}
       try {
         if (!enabledTools.has(call.name)) throw new Error(`Tool is not enabled for this agent: ${call.name}`)
-        const args = JSON.parse(call.arguments || '{}')
+        args = JSON.parse(call.arguments || '{}')
         output = { ok: true, result: await executeAiTool(call.name, args, { client }) }
       } catch (error) {
         output = { ok: false, error: error.message || 'Tool execution failed.' }
       }
+      const toolEvent = { role: 'tool', text: summarizeToolCall(call.name, args, output) }
+      toolEvents.push(toolEvent)
+      emit({ type: 'tool', message: toolEvent })
       input.push({
         type: 'function_call_output',
         call_id: call.call_id,
@@ -102,7 +164,7 @@ export async function sendAiMessage(payload = {}) {
 function normalizeConversationMessages(messages) {
   return Array.isArray(messages)
     ? messages
-      .filter(item => item?.role === 'user' || item?.role === 'assistant')
+      .filter(item => item?.role === 'user' || item?.role === 'assistant' || item?.role === 'tool')
       .slice(-100)
       .map(item => ({ role: item.role, text: String(item.text ?? '').slice(0, 50000) }))
       .filter(item => item.text.trim())

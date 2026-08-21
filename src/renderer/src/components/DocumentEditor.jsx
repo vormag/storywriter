@@ -1,10 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
+import {
+  FiBold,
+  FiChevronDown,
+  FiCornerDownRight,
+  FiCornerUpLeft,
+  FiCornerUpRight,
+  FiImage,
+  FiItalic,
+  FiLink,
+  FiLink2,
+  FiMaximize,
+  FiZoomIn,
+  FiZoomOut
+} from 'react-icons/fi'
 import StarterKit from '@tiptap/starter-kit'
 import { PaginationPlus } from 'tiptap-pagination-plus'
 import {
   Autocomplete,
   Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
   IconButton,
   MenuItem,
@@ -14,7 +33,7 @@ import {
   Typography
 } from '@mui/material'
 import { documentToMarkdown, markdownToDocument } from '../editor/markdownAdapter'
-import { StoryPageBreak } from '../editor/storyExtensions'
+import { StoryImage, StoryPageBreak } from '../editor/storyExtensions'
 
 const A4 = { width: 794, height: 1123 }
 const LETTER = { width: 816, height: 1056 }
@@ -22,9 +41,17 @@ const PAGE_GAP = 18
 const FONT_SIZES = [9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32]
 const PROJECT_FONT_ALIAS = 'Storywriter Project Font'
 const SELECTION_HIGHLIGHT = 'storywriter-editor-selection'
+const PAGINATION_LOOP_WINDOW_MS = 700
+const PAGINATION_LOOP_TRANSACTION_LIMIT = 14
+const iconSize = 16
 const mmToPixels = value => Math.round((Number(value) || 0) * 96 / 25.4)
 const clampScale = value => Math.min(2, Math.max(0.5, Number(value) || 1))
 const quoteFont = value => `"${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+const imageDimension = value => {
+  const text = String(value ?? '').replace(/[^\d]/g, '').slice(0, 4)
+  const number = Number.parseInt(text, 10)
+  return Number.isFinite(number) && number > 0 ? String(number) : ''
+}
 
 function ToolButton({ title, active = false, disabled = false, onClick, children }) {
   return (
@@ -50,6 +77,215 @@ function ToolButton({ title, active = false, disabled = false, onClick, children
   )
 }
 
+function AddImageDialog({
+  assets,
+  assetUrlForPath,
+  markdownAssetPath,
+  selectedImage,
+  onClose,
+  onInsert,
+  onUploadImages
+}) {
+  const initialSelectedPath = () => selectedImage
+    ? assets.find(asset => assetUrlForPath(asset.path) === selectedImage.src || markdownAssetPath(asset.path) === selectedImage.markdownSrc)?.path || ''
+    : ''
+  const [query, setQuery] = useState('')
+  const [selectedPath, setSelectedPath] = useState(initialSelectedPath)
+  const [width, setWidth] = useState(() => selectedImage?.width || '')
+  const [height, setHeight] = useState(() => selectedImage?.height || '')
+  const [align, setAlign] = useState(() => selectedImage?.align || 'center')
+  const [dimensionsLinked, setDimensionsLinked] = useState(true)
+  const [naturalSizes, setNaturalSizes] = useState({})
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const filteredAssets = assets.filter(asset => {
+    const value = query.trim().toLocaleLowerCase()
+    if (!value) return true
+    return `${asset.label || ''} ${asset.path || ''}`.toLocaleLowerCase().includes(value)
+  })
+  const selectedAsset = assets.find(asset => asset.path === selectedPath) || null
+  const selectedNaturalSize = selectedAsset ? naturalSizes[selectedAsset.path] : null
+
+  const imagePayload = asset => asset
+    ? {
+      path: asset.path,
+      markdownSrc: markdownAssetPath(asset.path),
+      src: assetUrlForPath(asset.path),
+      alt: asset.label?.replace(/\.[^.]+$/, '') || 'Image',
+      width: imageDimension(width),
+      height: imageDimension(height),
+      align
+    }
+    : {
+      ...selectedImage,
+      width: imageDimension(width),
+      height: imageDimension(height),
+      align
+    }
+
+  const selectAsset = asset => {
+    if (selectedPath === asset.path) {
+      setSelectedPath('')
+      setWidth('')
+      setHeight('')
+      return
+    }
+    setSelectedPath(asset.path)
+    const size = naturalSizes[asset.path]
+    setWidth(size ? String(size.width) : '')
+    setHeight(size ? String(size.height) : '')
+  }
+
+  const updateWidth = value => {
+    const next = imageDimension(value)
+    setWidth(next)
+    if (dimensionsLinked && selectedNaturalSize?.width && selectedNaturalSize?.height && next) {
+      setHeight(String(Math.max(1, Math.round(Number(next) * selectedNaturalSize.height / selectedNaturalSize.width))))
+    }
+  }
+
+  const updateHeight = value => {
+    const next = imageDimension(value)
+    setHeight(next)
+    if (dimensionsLinked && selectedNaturalSize?.width && selectedNaturalSize?.height && next) {
+      setWidth(String(Math.max(1, Math.round(Number(next) * selectedNaturalSize.width / selectedNaturalSize.height))))
+    }
+  }
+
+  const applyImage = () => {
+    if (!selectedAsset && !selectedImage) return
+    onInsert(imagePayload(selectedAsset))
+  }
+
+  const updateNaturalSize = (asset, image) => {
+    const size = {
+      width: image.naturalWidth || image.width,
+      height: image.naturalHeight || image.height
+    }
+    if (!size.width || !size.height) return
+    setNaturalSizes(current => ({ ...current, [asset.path]: size }))
+    if (selectedPath === asset.path && !width && !height) {
+      setWidth(String(size.width))
+      setHeight(String(size.height))
+    }
+  }
+
+  const upload = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const uploaded = await onUploadImages()
+      if (uploaded?.[0]) {
+        setQuery('')
+        setSelectedPath(uploaded[0].path)
+        setWidth('')
+        setHeight('')
+      }
+    } catch (reason) {
+      setError(reason.message || 'Could not upload images.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open onClose={onClose} fullWidth maxWidth="md">
+      <DialogTitle>{selectedImage ? 'Edit Image' : 'Add Image'}</DialogTitle>
+      <DialogContent sx={{ display: 'grid', gap: 1.5, pt: '8px !important' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          <TextField size="small" label="Width" value={width} onChange={event => updateWidth(event.target.value)} inputProps={{ inputMode: 'numeric' }} sx={{ width: 120 }} />
+          <Tooltip title={dimensionsLinked ? 'Unlink dimensions' : 'Link dimensions'}>
+            <span>
+              <IconButton
+                size="small"
+                onClick={() => setDimensionsLinked(value => !value)}
+                disabled={!selectedNaturalSize}
+                sx={{ width: 34, height: 34, borderRadius: 1, color: dimensionsLinked ? 'primary.main' : 'text.secondary' }}
+              >
+                {dimensionsLinked ? <FiLink2 size={iconSize} /> : <FiLink size={iconSize} />}
+              </IconButton>
+            </span>
+          </Tooltip>
+          <TextField size="small" label="Height" value={height} onChange={event => updateHeight(event.target.value)} inputProps={{ inputMode: 'numeric' }} sx={{ width: 120 }} />
+          <Box sx={{ flex: 1 }} />
+          <Box sx={{ display: 'flex', border: 1, borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
+            {['left', 'center', 'right'].map(value => (
+              <Button
+                key={value}
+                size="small"
+                variant={align === value ? 'contained' : 'text'}
+                onClick={() => setAlign(value)}
+                sx={{ minWidth: 58, borderRadius: 0 }}
+              >
+                {value}
+              </Button>
+            ))}
+          </Box>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 0.75 }}>
+          <TextField size="small" fullWidth autoFocus value={query} placeholder="Search assets by name" onChange={event => setQuery(event.target.value)} />
+          <Button size="small" variant="outlined" disabled={busy} onClick={upload}>Upload</Button>
+        </Box>
+        {error && <Typography variant="body2" color="error">{error}</Typography>}
+        <Box sx={{
+          minHeight: 260,
+          maxHeight: 420,
+          overflow: 'auto',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(132px, 132px))',
+          gridAutoRows: 'max-content',
+          alignContent: 'start',
+          alignItems: 'start',
+          gap: 1
+        }}>
+          {filteredAssets.map(item => {
+            const label = item.label || item.path
+            return (
+              <Box
+                component="button"
+                type="button"
+                key={item.path}
+                disabled={busy}
+                onClick={() => selectAsset(item)}
+                style={{ font: 'inherit', textAlign: 'left' }}
+                sx={{
+                  display: 'grid',
+                  gap: 0.5,
+                  p: 0.75,
+                  border: 1,
+                  borderColor: selectedPath === item.path ? 'primary.main' : 'divider',
+                  borderRadius: 1,
+                  bgcolor: selectedPath === item.path ? 'action.selected' : 'background.paper',
+                  color: 'text.primary',
+                  cursor: busy ? 'default' : 'pointer',
+                  alignSelf: 'start'
+                }}
+              >
+                <Box
+                  component="img"
+                  src={assetUrlForPath(item.path)}
+                  alt=""
+                  onLoad={event => updateNaturalSize(item, event.currentTarget)}
+                  sx={{ width: '100%', aspectRatio: '4 / 3', objectFit: 'cover', bgcolor: 'action.hover' }}
+                />
+                <Typography variant="caption" noWrap title={label}>{label}</Typography>
+              </Box>
+            )
+          })}
+          {!assets.length && <Typography variant="body2" color="text.secondary">No assets yet.</Typography>}
+          {Boolean(assets.length) && !filteredAssets.length && <Typography variant="body2" color="text.secondary">No matching assets.</Typography>}
+        </Box>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+        <Button variant="contained" disabled={!selectedAsset && !selectedImage} onClick={applyImage}>
+          {selectedImage ? 'Apply' : 'Insert'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  )
+}
+
 export default function DocumentEditor({
   content,
   filePath,
@@ -63,7 +299,12 @@ export default function DocumentEditor({
   saveStatus,
   selectionRequest,
   onSelectionChange,
-  onOpenLink
+  onOpenLink,
+  assets = [],
+  assetUrlForPath,
+  resolveImageSrc,
+  markdownAssetPath,
+  onUploadImages
 }) {
   const scrollRef = useRef(null)
   const editorHostRef = useRef(null)
@@ -92,6 +333,8 @@ export default function DocumentEditor({
     undo: false,
     redo: false
   })
+  const [selectedImage, setSelectedImage] = useState(null)
+  const [imageDialogOpen, setImageDialogOpen] = useState(false)
 
   useEffect(() => {
     onChangeRef.current = onChange
@@ -124,6 +367,7 @@ export default function DocumentEditor({
       link: { openOnClick: false, autolink: true, linkOnPaste: true }
     }),
     StoryPageBreak,
+    StoryImage,
     PaginationPlus.configure({
       enabled: true,
       pageWidth: format.width,
@@ -164,6 +408,19 @@ export default function DocumentEditor({
       }
     }
     onSelectionChangeRef.current?.(text ? { text, from, to } : null)
+    const imageSelection = editor.state.selection.node?.type.name === 'storyImage'
+      ? {
+        position: from,
+        src: editor.state.selection.node.attrs.src || '',
+        markdownSrc: editor.state.selection.node.attrs.markdownSrc || '',
+        alt: editor.state.selection.node.attrs.alt || '',
+        title: editor.state.selection.node.attrs.title || '',
+        width: editor.state.selection.node.attrs.width || '',
+        height: editor.state.selection.node.attrs.height || '',
+        align: editor.state.selection.node.attrs.align || 'center'
+      }
+      : null
+    setSelectedImage(imageSelection)
     setRangeStyle({
       bold: editor.isActive('bold'),
       italic: editor.isActive('italic'),
@@ -175,7 +432,7 @@ export default function DocumentEditor({
 
   const editor = useEditor({
     extensions,
-    content: markdownToDocument(content),
+    content: markdownToDocument(content, { resolveImageSrc }),
     editorProps: {
       attributes: {
         'aria-label': 'Document editor',
@@ -222,6 +479,48 @@ export default function DocumentEditor({
       }, 160)
     }
   }, [filePath])
+
+  useEffect(() => {
+    if (!editor) return undefined
+
+    const view = editor.view
+    const originalDispatch = view.dispatch
+    const dispatch = originalDispatch.bind(view)
+    const emptyTransactions = []
+    let cooldownTimer
+
+    // ProseMirror exposes dispatch as a mutable integration point; guard the
+    // third-party pagination plugin from flooding empty reflow transactions.
+    // eslint-disable-next-line react-hooks/immutability
+    view.dispatch = transaction => {
+      const isEmptyPaginationReflow = !transaction.docChanged && !transaction.selectionSet && transaction.steps.length === 0
+
+      if (isEmptyPaginationReflow) {
+        const now = window.performance.now()
+        while (emptyTransactions.length && now - emptyTransactions[0] > PAGINATION_LOOP_WINDOW_MS) {
+          emptyTransactions.shift()
+        }
+        emptyTransactions.push(now)
+
+        if (emptyTransactions.length > PAGINATION_LOOP_TRANSACTION_LIMIT) {
+          window.clearTimeout(cooldownTimer)
+          cooldownTimer = window.setTimeout(() => {
+            emptyTransactions.length = 0
+          }, PAGINATION_LOOP_WINDOW_MS)
+          return
+        }
+      } else {
+        emptyTransactions.length = 0
+      }
+
+      dispatch(transaction)
+    }
+
+    return () => {
+      window.clearTimeout(cooldownTimer)
+      view.dispatch = originalDispatch
+    }
+  }, [editor])
 
   useEffect(() => () => {
     window.CSS?.highlights?.delete(SELECTION_HIGHLIGHT)
@@ -396,10 +695,10 @@ export default function DocumentEditor({
     <Box sx={{ minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Box className="document-toolbar">
         <ToolButton title="Undo" disabled={!rangeStyle.undo} onClick={() => editor?.chain().focus().undo().run()}>
-          ↶
+          <FiCornerUpLeft size={iconSize} />
         </ToolButton>
         <ToolButton title="Redo" disabled={!rangeStyle.redo} onClick={() => editor?.chain().focus().redo().run()}>
-          ↷
+          <FiCornerUpRight size={iconSize} />
         </ToolButton>
         <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
         <Autocomplete
@@ -409,7 +708,7 @@ export default function DocumentEditor({
           selectOnFocus
           handleHomeEndKeys
           forcePopupIcon
-          popupIcon={<span style={{ fontSize: 12, lineHeight: 1 }}>▾</span>}
+          popupIcon={<FiChevronDown size={14} />}
           options={fonts}
           value={typography.fontFamily || 'Literata'}
           onChange={(_event, value) => onTypographyChange?.({ fontFamily: value })}
@@ -449,10 +748,14 @@ export default function DocumentEditor({
         </Select>
         <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
         <ToolButton title="Bold (Ctrl+B)" active={rangeStyle.bold} onClick={() => editor?.chain().focus().toggleBold().run()}>
-          B
+          <FiBold size={iconSize} />
         </ToolButton>
         <ToolButton title="Italic (Ctrl+I)" active={rangeStyle.italic} onClick={() => editor?.chain().focus().toggleItalic().run()}>
-          <i>I</i>
+          <FiItalic size={iconSize} />
+        </ToolButton>
+        <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
+        <ToolButton title="Add image" onClick={() => setImageDialogOpen(true)}>
+          <FiImage size={iconSize} />
         </ToolButton>
         <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
         {[1, 2, 3].map(level => (
@@ -467,23 +770,23 @@ export default function DocumentEditor({
         ))}
         <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
         <ToolButton title="Insert page break" onClick={() => editor?.chain().focus().insertContent({ type: 'storyPageBreak' }).run()}>
-          ↵
+          <FiCornerDownRight size={iconSize} />
         </ToolButton>
         <Box sx={{ flex: 1 }} />
         <Typography variant="caption" color="text.secondary" sx={{ mr: 1, whiteSpace: 'nowrap' }}>
           {wordCount.toLocaleString()} words · page {Math.min(currentPage + 1, pageCount)}/{pageCount} · {saveStatus}
         </Typography>
         <ToolButton title="Zoom out" onClick={() => updateScale(scale - 0.1)}>
-          −
+          <FiZoomOut size={iconSize} />
         </ToolButton>
         <Typography variant="caption" sx={{ width: 38, textAlign: 'center' }}>
           {Math.round(scale * 100)}%
         </Typography>
         <ToolButton title="Actual size (100%)" onClick={() => updateScale(1)}>
-          <span style={{ fontSize: 10, letterSpacing: '-0.5px' }}>1:1</span>
+          <FiMaximize size={iconSize} />
         </ToolButton>
         <ToolButton title="Zoom in" onClick={() => updateScale(scale + 0.1)}>
-          +
+          <FiZoomIn size={iconSize} />
         </ToolButton>
       </Box>
       <Box ref={scrollRef} id="document-scroll" className="document-scroll">
@@ -493,6 +796,43 @@ export default function DocumentEditor({
           </Box>
         </Box>
       </Box>
+      {imageDialogOpen && (
+        <AddImageDialog
+          assets={assets}
+          assetUrlForPath={assetUrlForPath}
+          markdownAssetPath={markdownAssetPath}
+          selectedImage={selectedImage}
+          onUploadImages={onUploadImages}
+          onClose={() => setImageDialogOpen(false)}
+          onInsert={image => {
+            if (selectedImage?.position !== undefined) {
+              editor?.chain().focus().setNodeSelection(selectedImage.position).updateAttributes('storyImage', {
+                src: image.src ?? selectedImage.src,
+                markdownSrc: image.markdownSrc ?? selectedImage.markdownSrc,
+                alt: image.alt ?? selectedImage.alt,
+                title: image.title ?? selectedImage.title,
+                width: image.width,
+                height: image.height,
+                align: image.align
+              }).run()
+            } else {
+              editor?.chain().focus().insertContent({
+                type: 'storyImage',
+                attrs: {
+                  src: image.src,
+                  markdownSrc: image.markdownSrc,
+                  alt: image.alt,
+                  title: '',
+                  width: image.width,
+                  height: image.height,
+                  align: image.align
+                }
+              }).run()
+            }
+            setImageDialogOpen(false)
+          }}
+        />
+      )}
     </Box>
   )
 }

@@ -22,7 +22,8 @@ const AVAILABLE_TOOLS = [
   ['remove_timeline_event', 'Remove timeline events'],
   ['edit_timeline_event', 'Edit timeline events'],
   ['select_range', 'Select text in editor'],
-  ['get_summary', 'Get file summaries']
+  ['get_summary', 'Get file summaries'],
+  ['view_image', 'View images']
 ]
 const REASONING_LEVELS = ['none', 'low', 'medium', 'high', 'xhigh', 'max']
 const DEFAULT_CONFIG = {

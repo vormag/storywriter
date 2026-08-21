@@ -13,6 +13,7 @@ import { normalizeRelative, slugify } from './utils.js'
 
 let activeRoot = null
 let activeProject = null
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.svg'])
 
 export function getActiveRoot() {
   if (!activeRoot) throw new Error('No project is open.')
@@ -91,12 +92,44 @@ async function scanAgentsDirectory(absoluteDirectory) {
   return result
 }
 
+async function scanAssetsDirectory(absoluteDirectory, relativeDirectory = 'assets') {
+  await fs.mkdir(absoluteDirectory, { recursive: true })
+  const entries = await fs.readdir(absoluteDirectory, { withFileTypes: true })
+  const result = []
+  for (const entry of entries.sort((a, b) => {
+    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
+    return a.name.localeCompare(b.name, undefined, { numeric: true })
+  })) {
+    if (entry.name.startsWith('.')) continue
+    const relativePath = `${relativeDirectory}/${entry.name}`
+    const absolutePath = path.join(absoluteDirectory, entry.name)
+    if (entry.isDirectory()) {
+      result.push({
+        id: relativePath,
+        path: relativePath,
+        label: entry.name.replaceAll('_', ' '),
+        kind: 'asset-folder',
+        children: await scanAssetsDirectory(absolutePath, relativePath)
+      })
+    } else if (entry.isFile() && IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+      result.push({
+        id: relativePath,
+        path: relativePath,
+        label: entry.name,
+        kind: 'asset'
+      })
+    }
+  }
+  return result
+}
+
 async function buildProjectSnapshot() {
   const root = getActiveRoot()
   if (!activeProject) throw new Error('No project is open.')
   const storyDirectory = path.join(root, 'story')
   const loreDirectory = path.join(root, 'lore')
   const agentsDirectory = path.join(root, 'agents')
+  const assetsDirectory = path.join(root, 'assets')
   const storyEntries = await fs.readdir(storyDirectory, { withFileTypes: true })
   const story = []
   for (const entry of storyEntries) {
@@ -121,6 +154,7 @@ async function buildProjectSnapshot() {
       story,
       lore: await scanLoreDirectory(loreDirectory, 'lore'),
       agents: await scanAgentsDirectory(agentsDirectory),
+      assets: await scanAssetsDirectory(assetsDirectory),
       timeline: {
         id: 'TIMELINE.md',
         path: 'TIMELINE.md',
@@ -153,6 +187,7 @@ async function initializeProject(root, title) {
   await fs.mkdir(storyDirectory, { recursive: true })
   await fs.mkdir(path.join(root, 'lore'), { recursive: true })
   await fs.mkdir(path.join(root, 'agents'), { recursive: true })
+  await fs.mkdir(path.join(root, 'assets'), { recursive: true })
   await fs.mkdir(path.join(root, CONVERSATIONS_DIRECTORY), { recursive: true })
   await fs.mkdir(path.join(root, SUMMARIES_DIRECTORY), { recursive: true })
 
@@ -186,9 +221,10 @@ export async function activateProject(root) {
     throw new Error('The existing .storywriter_project.json file is invalid.')
   }
   await fs.mkdir(path.join(absoluteRoot, 'agents'), { recursive: true })
+  await fs.mkdir(path.join(absoluteRoot, 'assets'), { recursive: true })
   await fs.mkdir(path.join(absoluteRoot, CONVERSATIONS_DIRECTORY), { recursive: true })
   await fs.mkdir(path.join(absoluteRoot, SUMMARIES_DIRECTORY), { recursive: true })
-  for (const required of ['story', 'lore', 'agents']) {
+  for (const required of ['story', 'lore', 'agents', 'assets']) {
     const stat = await fs.stat(path.join(absoluteRoot, required)).catch(() => null)
     if (!stat?.isDirectory()) throw new Error(`Project folder is missing: ${required}`)
   }
@@ -421,6 +457,20 @@ export async function renameEntry(payload) {
     return { path: nextRelative, project: await buildProjectSnapshot() }
   }
 
+  if (/^assets\//i.test(relativePath) && IMAGE_EXTENSIONS.has(path.extname(relativePath).toLowerCase())) {
+    const target = resolveProjectPath(relativePath)
+    const extension = path.extname(relativePath)
+    const parent = path.posix.dirname(relativePath)
+    const nextRelative = `${parent}/${slugify(newName)}${extension}`
+    const nextTarget = resolveProjectPath(nextRelative)
+    if (nextRelative !== relativePath && await pathExists(nextTarget)) {
+      throw new Error('An asset with that name already exists.')
+    }
+    if (nextRelative !== relativePath) await fs.rename(target, nextTarget)
+    await rewriteRelativeLinks(relativePath, nextRelative)
+    return { path: nextRelative, project: await buildProjectSnapshot() }
+  }
+
   const target = resolveProjectPath(relativePath)
   const stat = await fs.stat(target)
   const parent = path.posix.dirname(relativePath)
@@ -442,7 +492,7 @@ export async function renameEntry(payload) {
 
 export async function deleteEntry(relativePath) {
   const relative = normalizeRelative(relativePath)
-  if (relative === 'TIMELINE.md' || relative === 'story' || relative === 'lore' || relative === 'agents') {
+  if (relative === 'TIMELINE.md' || relative === 'story' || relative === 'lore' || relative === 'agents' || relative === 'assets') {
     throw new Error('That project item cannot be deleted.')
   }
   await fs.rm(resolveProjectPath(relative), { recursive: true, force: false })
@@ -453,6 +503,12 @@ export async function readDocument(relativePath) {
   const relative = normalizeRelative(relativePath)
   const isMarkdown = relative.toLowerCase().endsWith('.md')
   const isAgent = relative.startsWith('agents/') && relative.toLowerCase().endsWith('.json')
+  const isAsset = relative.startsWith('assets/') && IMAGE_EXTENSIONS.has(path.extname(relative).toLowerCase())
+  if (isAsset) {
+    await fs.access(resolveProjectPath(relative))
+    await updateRecent(getActiveRoot(), activeProject, relative)
+    return { path: relative, content: '', kind: 'asset' }
+  }
   if (!isMarkdown && !isAgent) throw new Error('That project document cannot be opened.')
   const content = await fs.readFile(resolveProjectPath(relative), 'utf8')
   await updateRecent(getActiveRoot(), activeProject, relative)
@@ -472,4 +528,40 @@ export async function writeDocument(payload) {
   await atomicWrite(resolveProjectPath(relative), content)
   await updateRecent(getActiveRoot(), activeProject, relative)
   return { savedAt: new Date().toISOString() }
+}
+
+function safeAssetFilename(value, fallback = 'image') {
+  const parsed = path.parse(String(value || fallback))
+  const extension = IMAGE_EXTENSIONS.has(parsed.ext.toLowerCase()) ? parsed.ext.toLowerCase() : '.jpg'
+  return `${slugify(parsed.name || fallback)}${extension}`
+}
+
+async function uniqueAssetPath(filename) {
+  await fs.mkdir(resolveProjectPath('assets'), { recursive: true })
+  const parsed = path.parse(safeAssetFilename(filename))
+  for (let index = 0; index < 1000; index += 1) {
+    const suffix = index ? `_${index + 1}` : ''
+    const relative = `assets/${parsed.name}${suffix}${parsed.ext}`
+    if (!await pathExists(resolveProjectPath(relative))) return relative
+  }
+  throw new Error('Could not create a unique asset filename.')
+}
+
+export async function chooseAndImportAssets(mainWindow) {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Add images to assets',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Images', extensions: [...IMAGE_EXTENSIONS].map(extension => extension.slice(1)) }]
+  })
+  if (result.canceled || !result.filePaths.length) return { assets: [], project: await buildProjectSnapshot() }
+
+  const assets = []
+  for (const filePath of result.filePaths) {
+    const extension = path.extname(filePath).toLowerCase()
+    if (!IMAGE_EXTENSIONS.has(extension)) continue
+    const relative = await uniqueAssetPath(path.basename(filePath))
+    await fs.copyFile(filePath, resolveProjectPath(relative))
+    assets.push({ path: relative, label: path.basename(relative), kind: 'asset' })
+  }
+  return { assets, project: await buildProjectSnapshot() }
 }

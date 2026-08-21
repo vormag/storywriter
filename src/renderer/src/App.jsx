@@ -1,6 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import {
+  FiCheck,
+  FiChevronLeft,
+  FiChevronRight,
+  FiDownload,
+  FiFileText,
+  FiFolder,
+  FiFolderPlus,
+  FiMenu,
+  FiMessageSquare,
+  FiMoon,
+  FiSun,
+  FiUpload,
+  FiX
+} from 'react-icons/fi'
+import {
   AppBar,
   Box,
   Button,
@@ -55,7 +70,61 @@ function flattenLore(items, result = { files: [], folders: [] }) {
   return result
 }
 
+function flattenAssets(items, result = []) {
+  for (const item of items || []) {
+    if (item.kind === 'asset-folder') flattenAssets(item.children, result)
+    else if (item.kind === 'asset') result.push(item)
+  }
+  return result
+}
+
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value))
+const iconSize = 16
+
+function normalizeProjectPath(value) {
+  const segments = []
+  for (const segment of String(value || '').replaceAll('\\', '/').replace(/^\/+/, '').split('/')) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') segments.pop()
+    else segments.push(segment)
+  }
+  return segments.join('/')
+}
+
+function projectAssetUrl(path) {
+  const relative = normalizeProjectPath(path)
+  return `storywriter-asset://project/${relative.split('/').map(encodeURIComponent).join('/')}`
+}
+
+function resolveImagePath(src, sourcePath) {
+  const value = String(src || '').trim()
+  if (!value || /^(https?:|data:|blob:|storywriter-asset:)/i.test(value)) return value
+  if (value.startsWith('/') || /^assets\//i.test(value)) return normalizeProjectPath(value)
+  return normalizeProjectPath(`${String(sourcePath || '').split('/').slice(0, -1).join('/')}/${value}`)
+}
+
+function markdownAssetPath(assetPath, sourcePath) {
+  const from = String(sourcePath || '').split('/').slice(0, -1)
+  const to = String(assetPath || '').split('/')
+  while (from.length && to.length && from[0] === to[0]) {
+    from.shift()
+    to.shift()
+  }
+  return `${from.map(() => '..').concat(to).join('/')}`
+}
+
+function ImageViewer({ path }) {
+  return (
+    <Box sx={{ height: '100%', minWidth: 0, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', bgcolor: 'background.default' }}>
+      <Box className="document-toolbar" sx={{ px: 1, display: 'flex', alignItems: 'center' }}>
+        <Typography variant="caption" color="text.secondary" noWrap>{path}</Typography>
+      </Box>
+      <Box sx={{ minHeight: 0, overflow: 'auto', display: 'grid', placeItems: 'center', p: 2 }}>
+        <Box component="img" src={projectAssetUrl(path)} alt="" sx={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: 3, bgcolor: 'background.paper' }} />
+      </Box>
+    </Box>
+  )
+}
 
 function resolveProjectLink(href, sourcePath) {
   const value = String(href || '').trim()
@@ -152,21 +221,21 @@ function SearchPopup({ scope, filePath, content, onClose, onOpenResult }) {
 
   useEffect(() => {
     const value = query.trim()
-    if (!value) {
+    let active = true
+    const timer = window.setTimeout(async () => {
+      if (!value) {
+        setResults([])
+        setResultQuery('')
+        setTruncated(false)
+        setActiveIndex(0)
+        setHasNavigated(false)
+        return
+      }
       setResults([])
       setResultQuery('')
       setTruncated(false)
       setActiveIndex(0)
       setHasNavigated(false)
-      return undefined
-    }
-    let active = true
-    setResults([])
-    setResultQuery('')
-    setTruncated(false)
-    setActiveIndex(0)
-    setHasNavigated(false)
-    const timer = window.setTimeout(async () => {
       setBusy(true)
       try {
         const response = scope === 'project'
@@ -252,9 +321,9 @@ function SearchPopup({ scope, filePath, content, onClose, onOpenResult }) {
         <Typography variant="caption" color="text.secondary" sx={{ minWidth: 52, textAlign: 'center', whiteSpace: 'nowrap' }}>
           {busy ? '…' : `${hasNavigated ? activeIndex + 1 : 0}/${results.length}${truncated ? '+' : ''}`}
         </Typography>
-        <Tooltip title="Previous result (Shift+Enter)"><span><IconButton size="small" disabled={!results.length} onClick={() => move(-1)}>‹</IconButton></span></Tooltip>
-        <Tooltip title="Next result (Enter)"><span><IconButton size="small" disabled={!results.length} onClick={() => move(1)}>›</IconButton></span></Tooltip>
-        <Tooltip title="Close (Esc)"><IconButton size="small" onClick={onClose}>×</IconButton></Tooltip>
+        <Tooltip title="Previous result (Shift+Enter)"><span><IconButton size="small" disabled={!results.length} onClick={() => move(-1)}><FiChevronLeft size={iconSize} /></IconButton></span></Tooltip>
+        <Tooltip title="Next result (Enter)"><span><IconButton size="small" disabled={!results.length} onClick={() => move(1)}><FiChevronRight size={iconSize} /></IconButton></span></Tooltip>
+        <Tooltip title="Close (Esc)"><IconButton size="small" onClick={onClose}><FiX size={iconSize} /></IconButton></Tooltip>
         {activeResult && <Typography variant="caption" color="text.secondary" sx={{ position: 'absolute', top: '100%', left: 8, mt: 0.5, px: 0.75, py: 0.25, bgcolor: 'background.paper', borderRadius: 0.75, boxShadow: 1 }}>
           {activeResult.path || filePath} · line {activeResult.line}
         </Typography>}
@@ -285,6 +354,7 @@ export default function App({ themeMode, onThemeToggle }) {
   const rightWidth = workspace.preferences.rightWidth ?? 278
 
   const lore = useMemo(() => flattenLore(workspace.project?.tree.lore), [workspace.project])
+  const assets = useMemo(() => flattenAssets(workspace.project?.tree.assets), [workspace.project])
 
   useEffect(() => {
     dispatch(loadRecents())
@@ -300,11 +370,12 @@ export default function App({ themeMode, onThemeToggle }) {
       ...workspace.project.tree.story.map(item => item.path),
       'TIMELINE.md',
       ...lore.files.map(item => item.path),
+      ...assets.map(item => item.path),
       ...(workspace.project.tree.agents || []).map(item => item.path)
     ]
     const target = available.includes(recent?.lastDocument) ? recent.lastDocument : available[0]
     if (target) dispatch(loadDocument(target))
-  }, [dispatch, workspace.project, workspace.activePath, workspace.recents, lore.files])
+  }, [dispatch, workspace.project, workspace.activePath, workspace.recents, lore.files, assets])
 
   useEffect(() => () => {
     window.clearTimeout(viewSaveTimerRef.current)
@@ -342,7 +413,7 @@ export default function App({ themeMode, onThemeToggle }) {
     }
     window.addEventListener('keydown', handleShortcut)
     return () => window.removeEventListener('keydown', handleShortcut)
-  }, [dispatch, workspace.activePath, workspace.dirty])
+  }, [dispatch, workspace.activePath, workspace.dirty, workspace.project])
 
   useEffect(() => {
     if (!workspace.project) return undefined
@@ -569,6 +640,7 @@ export default function App({ themeMode, onThemeToggle }) {
 
   const isTimeline = workspace.activePath === 'TIMELINE.md'
   const isAgent = /^agents\/.*\.json$/i.test(workspace.activePath || '')
+  const isAsset = /^assets\/.*\.(?:jpe?g|png|gif|webp|avif|svg)$/i.test(workspace.activePath || '')
 
   return (
     <Box className="app-shell">
@@ -577,24 +649,24 @@ export default function App({ themeMode, onThemeToggle }) {
           <Tooltip title="Toggle project tree"><IconButton size="small" onClick={() => {
             const next = !leftOpen
             persistPreference({ leftOpen: next })
-          }}>☰</IconButton></Tooltip>
+          }}><FiMenu size={iconSize} /></IconButton></Tooltip>
           <Typography variant="body2" sx={{ fontWeight: 600, ml: 0.5 }} noWrap>{workspace.project.title}</Typography>
           {workspace.activePath && <Typography variant="caption" color="text.secondary" noWrap sx={{ ml: 1 }}>— {workspace.activePath}</Typography>}
           <Box sx={{ flex: 1 }} />
-          <Button disabled={exportBusy} onClick={exportPdf} sx={{ minWidth: 0, px: 0.75 }}>PDF</Button>
-          <Button disabled={gitBusy} onClick={() => runGit('pull')} sx={{ minWidth: 0, px: 0.75 }}>↓ Pull</Button>
-          <Button disabled={gitBusy} onClick={() => setTextDialog({ type: 'commit', title: 'Commit changes', label: 'Commit message', action: 'Commit' })} sx={{ minWidth: 0, px: 0.75 }}>✓ Commit</Button>
-          <Button disabled={gitBusy} onClick={() => runGit('push')} sx={{ minWidth: 0, px: 0.75 }}>↑ Push</Button>
+          <Button disabled={exportBusy} onClick={exportPdf} startIcon={<FiFileText size={14} />} sx={{ minWidth: 0, px: 0.75 }}>PDF</Button>
+          <Button disabled={gitBusy} onClick={() => runGit('pull')} startIcon={<FiDownload size={14} />} sx={{ minWidth: 0, px: 0.75 }}>Pull</Button>
+          <Button disabled={gitBusy} onClick={() => setTextDialog({ type: 'commit', title: 'Commit changes', label: 'Commit message', action: 'Commit' })} startIcon={<FiCheck size={14} />} sx={{ minWidth: 0, px: 0.75 }}>Commit</Button>
+          <Button disabled={gitBusy} onClick={() => runGit('push')} startIcon={<FiUpload size={14} />} sx={{ minWidth: 0, px: 0.75 }}>Push</Button>
           <Tooltip title={themeMode === 'dark' ? 'Use light theme' : 'Use dark theme'}>
-            <IconButton size="small" onClick={onThemeToggle}>{themeMode === 'dark' ? '☀' : '☾'}</IconButton>
+            <IconButton size="small" onClick={onThemeToggle}>{themeMode === 'dark' ? <FiSun size={iconSize} /> : <FiMoon size={iconSize} />}</IconButton>
           </Tooltip>
-          <Tooltip title="New project"><IconButton size="small" onClick={() => setTextDialog({ type: 'project', title: 'New project', label: 'Project title' })}>＋</IconButton></Tooltip>
-          <Tooltip title="Open project"><IconButton size="small" onClick={() => dispatch(openProject())}>↗</IconButton></Tooltip>
+          <Tooltip title="New project"><IconButton size="small" onClick={() => setTextDialog({ type: 'project', title: 'New project', label: 'Project title' })}><FiFolderPlus size={iconSize} /></IconButton></Tooltip>
+          <Tooltip title="Open project"><IconButton size="small" onClick={() => dispatch(openProject())}><FiFolder size={iconSize} /></IconButton></Tooltip>
           <Tooltip title="Toggle assistant"><IconButton size="small" onClick={() => {
             const next = !rightOpen
             persistPreference({ rightOpen: next })
-          }} sx={{ fontSize: 11, fontWeight: 700 }}>AI</IconButton></Tooltip>
-          <Tooltip title="Close project"><IconButton size="small" onClick={() => dispatch(closeProject())}>×</IconButton></Tooltip>
+          }}><FiMessageSquare size={iconSize} /></IconButton></Tooltip>
+          <Tooltip title="Close project"><IconButton size="small" onClick={() => dispatch(closeProject())}><FiX size={iconSize} /></IconButton></Tooltip>
         </Toolbar>
       </AppBar>
       <Box
@@ -652,7 +724,10 @@ export default function App({ themeMode, onThemeToggle }) {
               onChange={(content, wordCount) => dispatch(setDraft({ content, wordCount }))}
             />
           )}
-          {workspace.activePath && !isTimeline && !isAgent && (
+          {workspace.activePath && isAsset && (
+            <ImageViewer path={workspace.activePath} />
+          )}
+          {workspace.activePath && !isTimeline && !isAgent && !isAsset && (
             <DocumentEditor
               key={`${workspace.activePath}-${workspace.project.marker.typography?.fontFamily || 'Literata'}-${workspace.project.marker.typography?.baseSize || 16}-${documentRevision}`}
               filePath={workspace.activePath}
@@ -672,6 +747,18 @@ export default function App({ themeMode, onThemeToggle }) {
                 selection ? { ...selection, path: workspace.activePath } : null
               )}
               onOpenLink={href => navigateLink(href, workspace.activePath)}
+              assets={assets}
+              assetUrlForPath={projectAssetUrl}
+              resolveImageSrc={src => {
+                const resolved = resolveImagePath(src, workspace.activePath)
+                return /^assets\//i.test(resolved) ? projectAssetUrl(resolved) : resolved
+              }}
+              markdownAssetPath={assetPath => markdownAssetPath(assetPath, workspace.activePath)}
+              onUploadImages={async () => {
+                const result = await window.storywriter.uploadImages()
+                if (result?.project) dispatch(refreshProject())
+                return result?.assets || []
+              }}
               onChange={(content, wordCount) => dispatch(setDraft({ content, wordCount }))}
             />
           )}

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { FiMoreVertical, FiPlus, FiRefreshCw } from 'react-icons/fi'
 import { RichTreeView } from '@mui/x-tree-view/RichTreeView'
 import {
   Box,
@@ -25,6 +26,12 @@ function buildItems(project) {
       children: project.tree.lore
     },
     {
+      id: 'section:assets',
+      label: 'Assets',
+      kind: 'section',
+      children: project.tree.assets || []
+    },
+    {
       id: 'section:agents',
       label: 'Agents',
       kind: 'section',
@@ -32,6 +39,8 @@ function buildItems(project) {
     }
   ]
 }
+
+const iconSize = 16
 
 function findItem(items, id) {
   for (const item of items) {
@@ -65,28 +74,28 @@ export default function ProjectTree({
     setSelectedId(activePath)
   }
   const selected = findItem(items, selectedId)
-  const editable = selected && !['section', 'timeline'].includes(selected.kind)
+  const editable = selected && !['section', 'timeline', 'asset-folder'].includes(selected.kind)
 
   const select = (_event, id) => {
     setSelectedId(id)
     const item = findItem(items, id)
-    if (/\.(md|json)$/i.test(item?.path || '')) onOpen(item.path)
+    if (/\.(md|json|jpe?g|png|gif|webp|avif|svg)$/i.test(item?.path || '')) onOpen(item.path)
   }
 
   return (
     <Box sx={{ height: '100%', minWidth: 0, display: 'flex', flexDirection: 'column', bgcolor: 'background.paper' }}>
       <Box className="panel-toolbar">
         <Tooltip title="New">
-          <IconButton size="small" onClick={event => setAddAnchor(event.currentTarget)}>+</IconButton>
+          <IconButton size="small" onClick={event => setAddAnchor(event.currentTarget)}><FiPlus size={iconSize} /></IconButton>
         </Tooltip>
         <Tooltip title="Refresh">
-          <IconButton size="small" onClick={onRefresh}>↻</IconButton>
+          <IconButton size="small" onClick={onRefresh}><FiRefreshCw size={iconSize} /></IconButton>
         </Tooltip>
         <Box sx={{ flex: 1 }} />
         <Tooltip title="Rename or delete">
           <span>
             <IconButton size="small" disabled={!editable} onClick={event => setMoreAnchor(event.currentTarget)}>
-              ⋮
+              <FiMoreVertical size={iconSize} />
             </IconButton>
           </span>
         </Tooltip>
@@ -97,7 +106,7 @@ export default function ProjectTree({
           items={items}
           selectedItems={selectedId || null}
           onSelectedItemsChange={select}
-          defaultExpandedItems={['section:story', 'section:lore', 'section:agents']}
+          defaultExpandedItems={['section:story', 'section:lore', 'section:assets', 'section:agents']}
           sx={{ minWidth: 0, '& .MuiTreeItem-label': { fontSize: 13 } }}
         />
       </Box>

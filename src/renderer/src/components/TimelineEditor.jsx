@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { FiPlus, FiRepeat, FiTrash2 } from 'react-icons/fi'
 import {
   Box,
   Button,
@@ -10,6 +11,8 @@ import {
   Typography
 } from '@mui/material'
 import { parseTimeline, serializeTimeline, sortTimeline } from '../editor/timelineAdapter'
+
+const iconSize = 16
 
 function countWords(rows) {
   return rows.reduce((count, row) => count + row.event.trim().split(/\s+/).filter(Boolean).length, 0)
@@ -99,8 +102,8 @@ export default function TimelineEditor({
       <Box className="document-toolbar">
         <Button size="small" variant={mode === 'view' ? 'contained' : 'text'} onClick={() => onModeChange?.('view')}>View</Button>
         <Button size="small" variant={mode === 'edit' ? 'contained' : 'text'} onClick={() => onModeChange?.('edit')}>Edit</Button>
-        {mode === 'edit' && <Button size="small" onClick={addRow}>+ Event</Button>}
-        {mode === 'edit' && <Button size="small" onClick={() => commit(sortTimeline(rows))}>⇅ Rearrange</Button>}
+        {mode === 'edit' && <Button size="small" onClick={addRow} startIcon={<FiPlus size={14} />}>Event</Button>}
+        {mode === 'edit' && <Button size="small" onClick={() => commit(sortTimeline(rows))} startIcon={<FiRepeat size={14} />}>Rearrange</Button>}
         <Box sx={{ flex: 1 }} />
         <Typography variant="caption" color="text.secondary">{rows.length} events · {saveStatus}</Typography>
       </Box>
@@ -142,13 +145,13 @@ export default function TimelineEditor({
             </TextField>
             <Tooltip title="Delete event">
               <IconButton size="small" onClick={() => removeRow(row.id)}>
-                ×
+                <FiTrash2 size={iconSize} />
               </IconButton>
             </Tooltip>
           </Box>
         ))}
         {!rows.length && (
-          <Button size="small" onClick={addRow} sx={{ mt: 1 }}>+ Add first event</Button>
+          <Button size="small" onClick={addRow} startIcon={<FiPlus size={14} />} sx={{ mt: 1 }}>Add first event</Button>
         )}
       </Box>}
     </Box>

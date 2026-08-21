@@ -1,5 +1,6 @@
-import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, net, protocol, shell } from 'electron'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { fileURLToPath } from 'node:url'
 import { getFonts } from 'font-list'
 import appIconIco from '../../build/icon.ico?asset'
@@ -22,9 +23,11 @@ import {
   chooseAndOpenProject,
   createEntry,
   deleteEntry,
+  chooseAndImportAssets,
   readDocument,
   refreshProject,
   renameEntry,
+  resolveProjectPath,
   searchProject,
   updateProjectTypography,
   updateWorkspacePreferences,
@@ -37,10 +40,19 @@ const preloadPath = path.join(__dirname, '../preload/index.cjs')
 const rendererHtml = path.join(__dirname, '../renderer/index.html')
 let mainWindow = null
 
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'storywriter-asset', privileges: { standard: true, secure: true, supportFetchAPI: true } }
+])
+
 function registerIpc() {
   ipcMain.handle('ai:status', () => getAiStatus())
   ipcMain.handle('ai:key:set', (_event, key) => setOpenAiKey(key))
-  ipcMain.handle('ai:chat', (_event, payload) => sendAiMessage(payload))
+  ipcMain.handle('ai:chat', (event, payload) => {
+    const requestId = String(payload?.requestId || '')
+    return sendAiMessage(payload, {
+      onEvent: update => event.sender.send('ai:chat-event', { ...update, requestId })
+    })
+  })
   ipcMain.handle('ai:conversations:list', () => listAiConversations())
   ipcMain.handle('ai:conversations:read', (_event, id) => readAiConversation(id))
   ipcMain.handle('ai:conversations:save', (_event, payload) => saveAiConversation(payload))
@@ -67,6 +79,7 @@ function registerIpc() {
   ipcMain.handle('project:create', (_event, title) => chooseAndCreateProject(mainWindow, title))
   ipcMain.handle('project:refresh', () => refreshProject())
   ipcMain.handle('project:search', (_event, query) => searchProject(query))
+  ipcMain.handle('images:upload', () => chooseAndImportAssets(mainWindow))
   ipcMain.handle('workspace:update', (_event, payload) => updateWorkspacePreferences(payload))
   ipcMain.handle('project:updateTypography', (_event, payload) => updateProjectTypography(payload))
   ipcMain.handle('git:run', (_event, payload) => runGit(payload))
@@ -75,6 +88,15 @@ function registerIpc() {
   ipcMain.handle('entry:delete', (_event, relativePath) => deleteEntry(relativePath))
   ipcMain.handle('document:read', (_event, relativePath) => readDocument(relativePath))
   ipcMain.handle('document:write', (_event, payload) => writeDocument(payload))
+}
+
+function registerAssetProtocol() {
+  protocol.handle('storywriter-asset', request => {
+    const url = new URL(request.url)
+    const relative = decodeURIComponent(url.pathname.replace(/^\/+/, ''))
+    if (!relative.startsWith('assets/')) throw new Error('Unsupported asset path.')
+    return net.fetch(pathToFileURL(resolveProjectPath(relative)).toString())
+  })
 }
 
 function createWindow() {
@@ -114,6 +136,7 @@ app.whenReady().then(() => {
   app.setAppUserModelId('com.storywriter.app')
   if (process.platform === 'darwin') app.dock?.setIcon(appIconPng)
   Menu.setApplicationMenu(null)
+  registerAssetProtocol()
   registerIpc()
   createWindow()
   app.on('activate', () => {

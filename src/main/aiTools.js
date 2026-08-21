@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
+import path from 'node:path'
 import { SUMMARIES_DIRECTORY } from './constants.js'
 import { resolveProjectPath } from './projectService.js'
 import { atomicWrite, pathExists, readJson } from './storage.js'
@@ -7,6 +8,16 @@ import { normalizeRelative } from './utils.js'
 
 const MAX_READ_LINES = 500
 const MAX_FIND_RESULTS = 100
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024
+const IMAGE_MIME_TYPES = new Map([
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.png', 'image/png'],
+  ['.gif', 'image/gif'],
+  ['.webp', 'image/webp'],
+  ['.avif', 'image/avif'],
+  ['.svg', 'image/svg+xml']
+])
 const TOOL_NAMES = new Set([
   'list',
   'find',
@@ -19,7 +30,8 @@ const TOOL_NAMES = new Set([
   'remove_timeline_event',
   'edit_timeline_event',
   'select_range',
-  'get_summary'
+  'get_summary',
+  'view_image'
 ])
 
 let eventSink = () => {}
@@ -60,6 +72,19 @@ function directoryPath(value) {
   }
   if (!/^(story|lore)(\/.*)?$/i.test(relative) || relative.includes('\0')) {
     throw new Error('Directory must be story, lore, or a folder inside one of them.')
+  }
+  resolveProjectPath(relative)
+  return relative
+}
+
+function imageAssetPath(value) {
+  const relative = normalizeRelative(value)
+  if (relative.split('/').some(segment => !segment || segment === '.' || segment === '..')) {
+    throw new Error('Path contains an invalid segment.')
+  }
+  const extension = path.extname(relative).toLowerCase()
+  if (!relative.startsWith('assets/') || !IMAGE_MIME_TYPES.has(extension) || relative.includes('\0')) {
+    throw new Error('Path must be an image file inside assets/.')
   }
   resolveProjectPath(relative)
   return relative
@@ -165,6 +190,10 @@ const DEFINITIONS = {
   }, ['path', 'text']),
   get_summary: tool('get_summary', 'Get a cached summary of a story or lore file. A stale or missing summary is regenerated automatically.', {
     path: { type: 'string', description: 'Project-relative story or lore Markdown path.' }
+  }, ['path']),
+  view_image: tool('view_image', 'Inspect a project image asset and return a concise visual description. Use this before reasoning about image contents.', {
+    path: { type: 'string', description: 'Project-relative image path inside assets/, for example assets/portrait.webp.' },
+    prompt: { type: 'string', description: 'Optional question or focus for the image inspection.' }
   }, ['path'])
 }
 
@@ -429,6 +458,45 @@ async function getSummary(args, context) {
   return { path: relative, summary, metadata: { cached: false, checksum } }
 }
 
+async function viewImage(args, context) {
+  const relative = imageAssetPath(args.path)
+  const absolute = resolveProjectPath(relative)
+  const stat = await fs.stat(absolute).catch(() => null)
+  if (!stat?.isFile()) throw new Error(`Image not found: ${relative}`)
+  if (stat.size > MAX_IMAGE_BYTES) throw new Error('Image is too large to inspect.')
+
+  const extension = path.extname(relative).toLowerCase()
+  const mimeType = IMAGE_MIME_TYPES.get(extension)
+  const image = await fs.readFile(absolute)
+  const focus = String(args.prompt ?? '').trim().slice(0, 1000)
+  const response = await context.client.responses.create({
+    model: 'gpt-5.6-luna',
+    reasoning: { effort: 'low' },
+    instructions: 'Inspect the project image for a fiction-writing assistant. Describe only visible content, composition, style, notable text, and relevant details. Do not invent unseen context.',
+    input: [{
+      role: 'user',
+      content: [
+        {
+          type: 'input_text',
+          text: [
+            `Project image path: ${relative}`,
+            focus ? `Inspection focus: ${focus}` : 'Describe this image concisely.'
+          ].join('\n')
+        },
+        {
+          type: 'input_image',
+          image_url: `data:${mimeType};base64,${image.toString('base64')}`,
+          detail: 'auto'
+        }
+      ]
+    }],
+    store: false
+  })
+  const description = response.output_text?.trim()
+  if (!description) throw new Error('OpenAI returned an empty image description.')
+  return { path: relative, description, metadata: { mimeType, sizeBytes: stat.size } }
+}
+
 const HANDLERS = {
   list: listFiles,
   find: findText,
@@ -441,7 +509,8 @@ const HANDLERS = {
   remove_timeline_event: removeTimelineEvent,
   edit_timeline_event: editTimelineEvent,
   select_range: selectRange,
-  get_summary: getSummary
+  get_summary: getSummary,
+  view_image: viewImage
 }
 
 export async function executeAiTool(name, args, context) {

@@ -1,3 +1,4 @@
+import { FiFolder, FiFolderPlus, FiMoon, FiSun } from 'react-icons/fi'
 import {
   Box,
   Button,
@@ -10,6 +11,8 @@ import {
   Tooltip,
   Typography
 } from '@mui/material'
+const iconSize = 16
+
 function relativeTime(iso) {
   const timestamp = Date.parse(iso)
   if (!Number.isFinite(timestamp)) return ''
@@ -27,10 +30,10 @@ export default function Welcome({ recents, busy, onCreate, onOpen, onOpenRecent,
           <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Storywriter</Typography>
           <Box sx={{ flex: 1 }} />
           <Tooltip title={themeMode === 'dark' ? 'Use light theme' : 'Use dark theme'}>
-            <IconButton size="small" onClick={onThemeToggle}>{themeMode === 'dark' ? '☀' : '☾'}</IconButton>
+            <IconButton size="small" onClick={onThemeToggle}>{themeMode === 'dark' ? <FiSun size={iconSize} /> : <FiMoon size={iconSize} />}</IconButton>
           </Tooltip>
-          <Button size="small" onClick={onCreate} disabled={busy}>+ New</Button>
-          <Button size="small" onClick={onOpen} disabled={busy}>Open folder…</Button>
+          <Button size="small" onClick={onCreate} disabled={busy} startIcon={<FiFolderPlus size={14} />}>New</Button>
+          <Button size="small" onClick={onOpen} disabled={busy} startIcon={<FiFolder size={14} />}>Open folder…</Button>
         </Box>
         <Divider />
         <List dense disablePadding sx={{ minHeight: 120, maxHeight: 360, overflow: 'auto' }}>

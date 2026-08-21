@@ -211,6 +211,32 @@ html[data-pdf-export] body {
   font-family: Consolas, monospace;
 }
 
+.tiptap-editor-scale .ProseMirror .story-image {
+  display: block;
+  width: 100%;
+  margin: 0 0 0.75em;
+  text-align: center;
+}
+
+.tiptap-editor-scale .ProseMirror .story-image[data-align="left"] {
+  text-align: left;
+}
+
+.tiptap-editor-scale .ProseMirror .story-image[data-align="right"] {
+  text-align: right;
+}
+
+.tiptap-editor-scale .ProseMirror .story-image img {
+  max-width: 100%;
+  max-height: calc(var(--rm-page-height, 1123px) - var(--rm-margin-top, 0px) - var(--rm-margin-bottom, 0px));
+  object-fit: contain;
+}
+
+.tiptap-editor-scale .ProseMirror .story-image.ProseMirror-selectednode {
+  outline: 2px solid #4d86d9;
+  outline-offset: 2px;
+}
+
 .tiptap-editor-scale .ProseMirror a,
 .assistant-markdown a {
   color: #1565c0;

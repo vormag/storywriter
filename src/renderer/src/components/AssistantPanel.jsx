@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import { FiClock, FiPlus, FiTrash2 } from 'react-icons/fi'
 import remarkGfm from 'remark-gfm'
 import {
   Box,
@@ -16,6 +17,8 @@ import {
   TextField,
   Typography
 } from '@mui/material'
+
+const iconSize = 16
 
 function MarkdownMessage({ children, onNavigate }) {
   return (
@@ -67,6 +70,7 @@ export default function AssistantPanel({
   const [keySaving, setKeySaving] = useState(false)
   const endRef = useRef(null)
   const restorationCompleteRef = useRef(false)
+  const activeChatRef = useRef(null)
   const onConversationChangeRef = useRef(onConversationChange)
   const enabled = Boolean(configured && selectedAgent)
 
@@ -77,6 +81,26 @@ export default function AssistantPanel({
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' })
   }, [messages, busy])
+
+  useEffect(() => {
+    return window.storywriter.onAiChatEvent?.(event => {
+      const active = activeChatRef.current
+      if (!active || event?.requestId !== active.requestId) return
+
+      if (event.type === 'delta' && event.text) {
+        const last = active.messages.at(-1)
+        if (last?.role === 'assistant' && last.streaming) {
+          last.text += event.text
+        } else {
+          active.messages.push({ role: 'assistant', text: event.text, streaming: true })
+        }
+        setMessages([...active.messages])
+      } else if (event.type === 'tool' && event.message?.text) {
+        active.messages.push({ role: 'tool', text: String(event.message.text) })
+        setMessages([...active.messages])
+      }
+    })
+  }, [])
 
   useEffect(() => {
     if (selectedAgent && !agents.some(agent => agent.path === selectedAgent)) {
@@ -146,17 +170,32 @@ export default function AssistantPanel({
 
     setInput('')
     setBusy(true)
+    const requestId = crypto.randomUUID()
     const withUserMessage = [...messages, { role: 'user', text: message }]
+    activeChatRef.current = { requestId, messages: [...withUserMessage] }
     setMessages(withUserMessage)
     try {
       await onBeforeSend?.()
       const response = await window.storywriter.sendAiMessage({
+        requestId,
         message,
         agentPath: selectedAgent,
         editorContext,
         history: messages.filter(item => item.role === 'user' || item.role === 'assistant')
       })
-      const completedMessages = [...withUserMessage, { role: 'assistant', text: response.text }]
+      const toolMessages = Array.isArray(response.toolEvents)
+        ? response.toolEvents
+          .filter(item => item?.role === 'tool' && String(item.text ?? '').trim())
+          .map(item => ({ role: 'tool', text: String(item.text).trim() }))
+        : []
+      const liveMessages = activeChatRef.current?.requestId === requestId
+        ? activeChatRef.current.messages
+        : withUserMessage
+      const completedMessages = liveMessages
+        .filter(item => item.role !== 'assistant')
+        .map(item => ({ role: item.role, text: item.text }))
+      if (!completedMessages.some(item => item.role === 'tool')) completedMessages.push(...toolMessages)
+      completedMessages.push({ role: 'assistant', text: response.text })
       setMessages(completedMessages)
       const saved = await window.storywriter.saveAiConversation({
         id: conversationId,
@@ -170,6 +209,7 @@ export default function AssistantPanel({
     } catch (error) {
       setMessages(current => [...current, { role: 'error', text: error.message || 'The request failed.' }])
     } finally {
+      if (activeChatRef.current?.requestId === requestId) activeChatRef.current = null
       setBusy(false)
     }
   }
@@ -275,7 +315,7 @@ export default function AssistantPanel({
           aria-label="Conversation history"
           title="Conversation history"
           onClick={openHistory}
-        >◷</IconButton>
+        ><FiClock size={iconSize} /></IconButton>
         <IconButton
           size="small"
           disabled={busy}
@@ -287,7 +327,7 @@ export default function AssistantPanel({
             setConversationId(null)
             onConversationChange(null)
           }}
-        >＋</IconButton>
+        ><FiPlus size={iconSize} /></IconButton>
       </Box>
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', p: 1 }}>
         {configured === false && (
@@ -314,8 +354,14 @@ export default function AssistantPanel({
               px: 1,
               py: 0.75,
               borderRadius: 1,
-              bgcolor: message.role === 'user' ? 'action.selected' : 'background.paper',
-              color: message.role === 'error' ? 'error.main' : 'text.primary'
+              bgcolor: message.role === 'user'
+                ? 'action.selected'
+                : message.role === 'tool' ? 'action.hover' : 'background.paper',
+              color: message.role === 'error'
+                ? 'error.main'
+                : message.role === 'tool' ? 'text.secondary' : 'text.primary',
+              borderLeft: message.role === 'tool' ? 2 : 0,
+              borderColor: 'divider'
             }}
           >
             {message.role === 'assistant'
@@ -340,7 +386,8 @@ export default function AssistantPanel({
             if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
             event.preventDefault()
             if (event.shiftKey || event.ctrlKey) {
-              const target = event.currentTarget
+              const target = event.target
+              if (!(target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement)) return
               const start = target.selectionStart ?? input.length
               const end = target.selectionEnd ?? start
               setInput(`${input.slice(0, start)}\n${input.slice(end)}`)
@@ -377,7 +424,7 @@ export default function AssistantPanel({
                     title="Remove conversation"
                     onClick={() => removeConversation(item)}
                     sx={{ mx: 1 }}
-                  >×</IconButton>
+                  ><FiTrash2 size={iconSize} /></IconButton>
                 </Box>
               ))}
             </List>

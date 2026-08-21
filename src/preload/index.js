@@ -4,6 +4,11 @@ contextBridge.exposeInMainWorld('storywriter', {
   getAiStatus: () => ipcRenderer.invoke('ai:status'),
   setOpenAiKey: key => ipcRenderer.invoke('ai:key:set', key),
   sendAiMessage: payload => ipcRenderer.invoke('ai:chat', payload),
+  onAiChatEvent: callback => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('ai:chat-event', listener)
+    return () => ipcRenderer.removeListener('ai:chat-event', listener)
+  },
   getAiConversations: () => ipcRenderer.invoke('ai:conversations:list'),
   readAiConversation: id => ipcRenderer.invoke('ai:conversations:read', id),
   saveAiConversation: payload => ipcRenderer.invoke('ai:conversations:save', payload),
@@ -29,6 +34,7 @@ contextBridge.exposeInMainWorld('storywriter', {
   createProject: title => ipcRenderer.invoke('project:create', title),
   refreshProject: () => ipcRenderer.invoke('project:refresh'),
   searchProject: query => ipcRenderer.invoke('project:search', query),
+  uploadImages: () => ipcRenderer.invoke('images:upload'),
   updateWorkspace: payload => ipcRenderer.invoke('workspace:update', payload),
   updateProjectTypography: payload => ipcRenderer.invoke('project:updateTypography', payload),
   runGit: payload => ipcRenderer.invoke('git:run', payload),

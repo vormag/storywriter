@@ -6,22 +6,52 @@ function textOf(node) {
   return (node.children || []).map(textOf).join('')
 }
 
-function inlineNodes(nodes, marks = []) {
+function imageSizeAttrs(text) {
+  const value = String(text || '').trim()
+  if (!/^\{.*\}$/.test(value)) return null
+  const attrs = { width: '', height: '', align: '' }
+  for (const [, key, rawValue] of value.matchAll(/\b(width|w|height|h|align)=([a-z\d]+)\b/gi)) {
+    if (key === 'width' || key === 'w') attrs.width = /^\d{1,4}$/.test(rawValue) ? rawValue : ''
+    if (key === 'height' || key === 'h') attrs.height = /^\d{1,4}$/.test(rawValue) ? rawValue : ''
+    if (key === 'align') attrs.align = /^(left|center|right)$/i.test(rawValue) ? rawValue.toLowerCase() : ''
+  }
+  return attrs.width || attrs.height || attrs.align ? attrs : null
+}
+
+function imageNode(node, resolveImageSrc, sizeAttrs = {}) {
+  const markdownSrc = node.url || ''
+  return {
+    type: 'storyImage',
+    attrs: {
+      src: resolveImageSrc ? resolveImageSrc(markdownSrc) : markdownSrc,
+      markdownSrc,
+      alt: node.alt || '',
+      title: node.title || '',
+      width: sizeAttrs.width || '',
+      height: sizeAttrs.height || '',
+      align: sizeAttrs.align || 'center'
+    }
+  }
+}
+
+function inlineNodes(nodes, marks = [], resolveImageSrc) {
   return (nodes || []).flatMap(node => {
     switch (node.type) {
       case 'text':
         return node.value ? [{ type: 'text', text: node.value, ...(marks.length ? { marks } : {}) }] : []
       case 'strong':
-        return inlineNodes(node.children, [...marks, { type: 'bold' }])
+        return inlineNodes(node.children, [...marks, { type: 'bold' }], resolveImageSrc)
       case 'emphasis':
-        return inlineNodes(node.children, [...marks, { type: 'italic' }])
+        return inlineNodes(node.children, [...marks, { type: 'italic' }], resolveImageSrc)
       case 'inlineCode':
         return node.value ? [{ type: 'text', text: node.value, marks: [...marks, { type: 'code' }] }] : []
       case 'link':
         return inlineNodes(node.children, [...marks, {
           type: 'link',
           attrs: { href: node.url || '', target: null, rel: 'noopener noreferrer nofollow', class: null }
-        }])
+        }], resolveImageSrc)
+      case 'image':
+        return [{ type: 'text', text: node.alt || node.url || '' }]
       case 'break':
         return [{ type: 'hardBreak' }]
       default: {
@@ -32,24 +62,31 @@ function inlineNodes(nodes, marks = []) {
   })
 }
 
-function blockNode(node) {
+function blockNode(node, resolveImageSrc) {
   switch (node.type) {
     case 'heading':
-      return { type: 'heading', attrs: { level: node.depth }, content: inlineNodes(node.children) }
+      return { type: 'heading', attrs: { level: node.depth }, content: inlineNodes(node.children, [], resolveImageSrc) }
     case 'paragraph':
-      return { type: 'paragraph', content: inlineNodes(node.children) }
+      if (node.children?.length === 1 && node.children[0].type === 'image') {
+        return imageNode(node.children[0], resolveImageSrc)
+      }
+      if (node.children?.length === 2 && node.children[0].type === 'image' && node.children[1].type === 'text') {
+        const sizeAttrs = imageSizeAttrs(node.children[1].value)
+        if (sizeAttrs) return imageNode(node.children[0], resolveImageSrc, sizeAttrs)
+      }
+      return { type: 'paragraph', content: inlineNodes(node.children, [], resolveImageSrc) }
     case 'list':
       return {
         type: node.ordered ? 'orderedList' : 'bulletList',
         ...(node.ordered ? { attrs: { start: node.start || 1, type: null } } : {}),
-        content: (node.children || []).map(blockNode).filter(Boolean)
+        content: (node.children || []).map(child => blockNode(child, resolveImageSrc)).filter(Boolean)
       }
     case 'listItem': {
-      const content = (node.children || []).map(blockNode).filter(Boolean)
+      const content = (node.children || []).map(child => blockNode(child, resolveImageSrc)).filter(Boolean)
       return { type: 'listItem', content: content.length ? content : [{ type: 'paragraph' }] }
     }
     case 'blockquote':
-      return { type: 'blockquote', content: (node.children || []).map(blockNode).filter(Boolean) }
+      return { type: 'blockquote', content: (node.children || []).map(child => blockNode(child, resolveImageSrc)).filter(Boolean) }
     case 'code':
       return {
         type: 'codeBlock',
@@ -69,9 +106,9 @@ function blockNode(node) {
   }
 }
 
-export function markdownToDocument(markdown) {
+export function markdownToDocument(markdown, options = {}) {
   const tree = unified().use(remarkParse).parse(String(markdown || ''))
-  const content = (tree.children || []).map(blockNode).filter(Boolean)
+  const content = (tree.children || []).map(node => blockNode(node, options.resolveImageSrc)).filter(Boolean)
   return { type: 'doc', content: content.length ? content : [{ type: 'paragraph' }] }
 }
 
@@ -135,6 +172,21 @@ function serializeBlock(node, depth = 0) {
       return '---'
     case 'storyPageBreak':
       return '<!-- pagebreak -->'
+    case 'storyImage': {
+      const attrs = node.attrs || {}
+      const alt = escapeMarkdown(attrs.alt || '')
+      const src = attrs.markdownSrc || attrs.src || ''
+      const title = attrs.title ? ` "${String(attrs.title).replaceAll('"', '\\"')}"` : ''
+      const width = Number.parseInt(attrs.width, 10)
+      const height = Number.parseInt(attrs.height, 10)
+      const align = /^(left|center|right)$/.test(attrs.align) ? attrs.align : 'center'
+      const size = [
+        Number.isFinite(width) && width > 0 ? `width=${width}` : '',
+        Number.isFinite(height) && height > 0 ? `height=${height}` : '',
+        align !== 'center' ? `align=${align}` : ''
+      ].filter(Boolean).join(' ')
+      return `![${alt}](${src}${title})${size ? `{${size}}` : ''}`
+    }
     default:
       return serializeInline(node.content)
   }

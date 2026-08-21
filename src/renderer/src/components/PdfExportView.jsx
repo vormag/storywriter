@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { generateHTML } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import { markdownToDocument } from '../editor/markdownAdapter'
-import { StoryPageBreak } from '../editor/storyExtensions'
+import { StoryImage, StoryPageBreak } from '../editor/storyExtensions'
 
 const PAGE_SIZES = {
   A4: { width: 794, height: 1123 },
@@ -12,8 +12,31 @@ const mmToPixels = value => Math.round((Number(value) || 0) * 96 / 25.4)
 
 const extensions = [
   StarterKit.configure({ link: { openOnClick: false } }),
-  StoryPageBreak
+  StoryPageBreak,
+  StoryImage
 ]
+
+function normalizeProjectPath(value) {
+  const segments = []
+  for (const segment of String(value || '').replaceAll('\\', '/').replace(/^\/+/, '').split('/')) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') segments.pop()
+    else segments.push(segment)
+  }
+  return segments.join('/')
+}
+
+function projectAssetUrl(path) {
+  const relative = normalizeProjectPath(path)
+  return `storywriter-asset://project/${relative.split('/').map(encodeURIComponent).join('/')}`
+}
+
+function resolveImagePath(src, sourcePath) {
+  const value = String(src || '').trim()
+  if (!value || /^(https?:|data:|blob:|storywriter-asset:)/i.test(value)) return value
+  if (value.startsWith('/') || /^assets\//i.test(value)) return normalizeProjectPath(value)
+  return normalizeProjectPath(`${String(sourcePath || '').split('/').slice(0, -1).join('/')}/${value}`)
+}
 
 export default function PdfExportView() {
   const [data, setData] = useState(null)
@@ -28,7 +51,12 @@ export default function PdfExportView() {
   }, [])
 
   const chapters = useMemo(() => data?.chapters.map(chapter => {
-    const document = markdownToDocument(chapter.content)
+    const document = markdownToDocument(chapter.content, {
+      resolveImageSrc: src => {
+        const resolved = resolveImagePath(src, chapter.path)
+        return /^assets\//i.test(resolved) ? projectAssetUrl(resolved) : resolved
+      }
+    })
     return {
       ...chapter,
       hasOpeningHeading: document.content?.[0]?.type === 'heading',
@@ -94,6 +122,10 @@ export default function PdfExportView() {
     .pdf-document pre { margin: 0 0 0.75em; padding: 0.65em 0.8em; overflow: hidden; background: #f3f3f3; border-radius: 3px; font-family: Consolas, monospace; }
     .pdf-document code { font-family: Consolas, monospace; }
     .pdf-document a { color: #1565c0; text-decoration: underline; }
+    .pdf-document .story-image { display: block; width: 100%; margin: 0 0 0.75em; text-align: center; }
+    .pdf-document .story-image[data-align="left"] { text-align: left; }
+    .pdf-document .story-image[data-align="right"] { text-align: right; }
+    .pdf-document .story-image img { max-width: 100%; max-height: 720px; object-fit: contain; }
     .pdf-document .story-page-break { height: 0; margin: 0; border: 0; break-after: page; }
   `
 
