@@ -26,9 +26,8 @@ const TOOL_NAMES = new Set([
   'write_lore',
   'edit_story',
   'edit_lore',
-  'add_timeline_event',
-  'remove_timeline_event',
-  'edit_timeline_event',
+  'read_timeline',
+  'edit_timeline',
   'select_range',
   'get_summary',
   'view_image'
@@ -167,22 +166,29 @@ const DEFINITIONS = {
     new_text: { type: 'string', description: 'Replacement text; may be empty to delete old_text.' },
     replace_all: { type: 'boolean', description: 'Replace every non-overlapping occurrence. Defaults to false.' }
   }, ['path', 'old_text', 'new_text']),
-  add_timeline_event: tool('add_timeline_event', 'Add an event to TIMELINE.md and automatically order events by date and optional time.', {
-    date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'Required calendar date in YYYY-MM-DD format.' },
-    time: { type: 'string', pattern: '^(?:[01]\\d|2[0-3]):[0-5]\\d$', description: 'Optional 24-hour time in HH:mm format.' },
-    event: { type: 'string' },
-    lore: { type: 'string', description: 'Optional lore Markdown path.' }
-  }, ['date', 'event']),
-  remove_timeline_event: tool('remove_timeline_event', 'Remove the single timeline row whose event name exactly matches.', {
-    event: { type: 'string', description: 'Exact event name.' }
-  }, ['event']),
-  edit_timeline_event: tool('edit_timeline_event', 'Edit the single timeline row whose event name exactly matches and automatically order events by date and optional time.', {
-    event: { type: 'string', description: 'Current exact event name.' },
-    date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'Replacement date in YYYY-MM-DD format.' },
-    time: { type: 'string', description: 'Replacement optional 24-hour time in HH:mm format; use an empty string to clear it.' },
-    new_event: { type: 'string', description: 'Replacement event name.' },
-    lore: { type: 'string', description: 'Replacement lore path; use an empty string to clear it.' }
-  }, ['event']),
+  read_timeline: tool('read_timeline', 'Read TIMELINE.md as structured rows. Each row includes a short SHA calculated from the row date, time, event, and lore fields.', {}),
+  edit_timeline: tool('edit_timeline', 'Edit TIMELINE.md by adding events and removing rows by event id from read_timeline. Applies removals first, then additions, and automatically orders events by date and optional time.', {
+    add: {
+      type: 'array',
+      description: 'Timeline events to add.',
+      items: {
+        type: 'object',
+        properties: {
+          date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'Required calendar date in YYYY-MM-DD format.' },
+          time: { type: 'string', pattern: '^(?:[01]\\d|2[0-3]):[0-5]\\d$', description: 'Optional 24-hour time in HH:mm format.' },
+          event: { type: 'string', description: 'Event name.' },
+          lore: { type: 'string', description: 'Optional lore Markdown path.' }
+        },
+        required: ['date', 'event'],
+        additionalProperties: false
+      }
+    },
+    remove: {
+      type: 'array',
+      description: 'Event ids to remove. Use the id returned by read_timeline.',
+      items: { type: 'string' }
+    }
+  }),
   select_range: tool('select_range', 'Open a story or lore file, select exact visible text in the editor, and scroll it into view. Use text without Markdown formatting markers.', {
     path: { type: 'string', description: 'Project-relative story or lore Markdown path.' },
     text: { type: 'string', description: 'Exact visible text to select.' },
@@ -338,6 +344,31 @@ async function readTimeline() {
   }).filter(item => item.event)
 }
 
+function timelineRowSha(row) {
+  const hash = createHash('sha256')
+  hash.update(JSON.stringify({
+    date: row.date,
+    time: row.time,
+    event: row.event,
+    lore: row.lore
+  }))
+  return hash.digest('hex').slice(0, 8)
+}
+
+async function readTimelineRows() {
+  const rows = await readTimeline()
+  return {
+    path: 'TIMELINE.md',
+    rows: rows.map((row, index) => ({
+      index: index + 1,
+      id: timelineRowSha(row),
+      sha: timelineRowSha(row),
+      ...row
+    })),
+    metadata: { eventCount: rows.length }
+  }
+}
+
 function timelineLoreCell(relative) {
   if (!relative) return ''
   const label = relative.split('/').at(-1).replace(/\.md$/i, '').replaceAll('_', ' ')
@@ -355,13 +386,6 @@ async function writeTimeline(events) {
   return { path: 'TIMELINE.md', eventCount: events.length }
 }
 
-function exactEvent(events, name) {
-  const matches = events.map((item, index) => ({ item, index })).filter(({ item }) => item.event === name)
-  if (!matches.length) throw new Error(`Timeline event not found: ${name}`)
-  if (matches.length > 1) throw new Error(`Multiple timeline events are named: ${name}`)
-  return matches[0]
-}
-
 function validateTimelineDate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('Timeline dates must use YYYY-MM-DD format.')
   const parsed = new Date(`${value}T00:00:00Z`)
@@ -376,46 +400,60 @@ function validateTimelineTime(value) {
   }
 }
 
-async function addTimelineEvent(args) {
-  const date = String(args.date ?? '').trim()
-  const time = String(args.time ?? '').trim()
-  const event = String(args.event ?? '').trim()
+function normalizeTimelineEvent(value, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object.`)
+  const date = String(value.date ?? '').trim()
+  const time = String(value.time ?? '').trim()
+  const event = String(value.event ?? '').trim()
   if (!date || !event) throw new Error('Timeline date and event are required.')
   validateTimelineDate(date)
   validateTimelineTime(time)
-  const lore = args.lore ? markdownPath(args.lore, ['lore']) : ''
-  const events = await readTimeline()
-  if (events.some(item => item.event === event)) throw new Error(`Timeline event already exists: ${event}`)
-  events.push({ date, time, event, lore })
-  return writeTimeline(events)
+  const lore = value.lore ? markdownPath(value.lore, ['lore']) : ''
+  return { date, time, event, lore }
 }
 
-async function removeTimelineEvent(args) {
-  const events = await readTimeline()
-  const match = exactEvent(events, String(args.event ?? '').trim())
-  events.splice(match.index, 1)
-  return writeTimeline(events)
+function assertUniqueTimelineIds(events) {
+  const seen = new Set()
+  for (const row of events) {
+    const id = timelineRowSha(row)
+    if (seen.has(id)) throw new Error(`Timeline row id is not unique: ${id}`)
+    seen.add(id)
+  }
 }
 
-async function editTimelineEvent(args) {
+async function editTimeline(args) {
+  if (args.add !== undefined && !Array.isArray(args.add)) throw new Error('add must be an array.')
+  if (args.remove !== undefined && !Array.isArray(args.remove)) throw new Error('remove must be an array.')
+  const add = args.add ?? []
+  const remove = (args.remove ?? []).map(id => String(id ?? '').trim()).filter(Boolean)
+  if (!add.length && !remove.length) throw new Error('Provide at least one timeline event to add or remove.')
+
+  const duplicateRemove = remove.find((id, index) => remove.indexOf(id) !== index)
+  if (duplicateRemove) throw new Error(`Timeline event id is listed more than once: ${duplicateRemove}`)
+
   const events = await readTimeline()
-  const match = exactEvent(events, String(args.event ?? '').trim())
-  if (args.date === undefined && args.time === undefined && args.new_event === undefined && args.lore === undefined) {
-    throw new Error('Provide at least one timeline field to change.')
+  assertUniqueTimelineIds(events)
+
+  const indexesToRemove = new Set()
+  for (const id of remove) {
+    const matches = events
+      .map((item, index) => ({ id: timelineRowSha(item), index }))
+      .filter(item => item.id === id)
+    if (!matches.length) throw new Error(`Timeline event id not found: ${id}`)
+    if (matches.length > 1) throw new Error(`Multiple timeline events match id: ${id}`)
+    indexesToRemove.add(matches[0].index)
   }
-  const next = { ...match.item }
-  if (args.date !== undefined) next.date = String(args.date).trim()
-  if (args.time !== undefined) next.time = String(args.time).trim()
-  if (args.new_event !== undefined) next.event = String(args.new_event).trim()
-  if (args.lore !== undefined) next.lore = args.lore ? markdownPath(args.lore, ['lore']) : ''
-  if (!next.date || !next.event) throw new Error('Timeline date and event cannot be empty.')
-  validateTimelineDate(next.date)
-  validateTimelineTime(next.time)
-  if (events.some((item, index) => index !== match.index && item.event === next.event)) {
-    throw new Error(`Timeline event already exists: ${next.event}`)
+
+  const nextEvents = events.filter((_, index) => !indexesToRemove.has(index))
+  nextEvents.push(...add.map((item, index) => normalizeTimelineEvent(item, `add[${index}]`)))
+  assertUniqueTimelineIds(nextEvents)
+
+  const result = await writeTimeline(nextEvents)
+  return {
+    ...result,
+    added: add.length,
+    removed: remove.length
   }
-  events[match.index] = next
-  return writeTimeline(events)
 }
 
 async function selectRange(args) {
@@ -505,9 +543,8 @@ const HANDLERS = {
   write_lore: args => writeMarkdown(args, 'lore'),
   edit_story: args => editMarkdown(args, 'story'),
   edit_lore: args => editMarkdown(args, 'lore'),
-  add_timeline_event: addTimelineEvent,
-  remove_timeline_event: removeTimelineEvent,
-  edit_timeline_event: editTimelineEvent,
+  read_timeline: readTimelineRows,
+  edit_timeline: editTimeline,
   select_range: selectRange,
   get_summary: getSummary,
   view_image: viewImage

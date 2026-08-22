@@ -18,9 +18,8 @@ const AVAILABLE_TOOLS = [
   ['write_lore', 'Write lore'],
   ['edit_story', 'Edit story'],
   ['edit_lore', 'Edit lore'],
-  ['add_timeline_event', 'Add timeline events'],
-  ['remove_timeline_event', 'Remove timeline events'],
-  ['edit_timeline_event', 'Edit timeline events'],
+  ['read_timeline', 'Read timeline'],
+  ['edit_timeline', 'Edit timeline'],
   ['select_range', 'Select text in editor'],
   ['get_summary', 'Get file summaries'],
   ['view_image', 'View images']

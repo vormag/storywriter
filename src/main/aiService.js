@@ -29,12 +29,10 @@ function summarizeToolCall(name, args, output) {
       return `Listed ${result.directory || normalizeRelative(args?.directory)}`
     case 'find':
       return `Searched files for "${String(args?.query ?? '').slice(0, 60)}"`
-    case 'add_timeline_event':
-      return `Added timeline event "${String(args?.event ?? '').slice(0, 60)}"`
-    case 'remove_timeline_event':
-      return `Removed timeline event "${String(args?.event ?? '').slice(0, 60)}"`
-    case 'edit_timeline_event':
-      return `Edited timeline event "${String(args?.event ?? '').slice(0, 60)}"`
+    case 'read_timeline':
+      return `Read timeline (${result.metadata?.eventCount ?? 0} events)`
+    case 'edit_timeline':
+      return `Edited timeline (+${result.added ?? 0}, -${result.removed ?? 0})`
     case 'select_range':
       return `Selected text in ${path}`
     case 'get_summary':

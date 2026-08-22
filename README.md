@@ -119,7 +119,7 @@ Lore can use any nested folder organization. Each folder is displayed as a categ
 | 2050-03-17 | 08:30 | Mara reaches Bellhaven | [Bellhaven](lore/places/bellhaven.md) |
 ```
 
-Date identifies each event, time and lore are optional, and **Rearrange** sorts rows by date and time. AI timeline tools require a date and sort automatically.
+Date identifies each event, time and lore are optional, and **Rearrange** sorts rows by date and time. AI timeline additions require a date and timeline edits sort automatically.
 
 ### Project marker
 

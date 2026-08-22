@@ -229,7 +229,7 @@ Edit mode provides:
 
 **Rearrange** sorts by date, then time, while preserving original order when both are equal. Timeline mode is remembered per project.
 
-AI add/edit timeline tools rearrange events automatically. If the timeline is open when an AI tool changes it, the view refreshes.
+AI timeline edits rearrange events automatically. If the timeline is open when an AI tool changes it, the view refreshes.
 
 ## AI assistants
 
@@ -302,9 +302,8 @@ Tools are granted per agent:
 | `write_lore` | Create lore pages, or replace an entire existing page only with `overwrite: true`. |
 | `edit_story` | Replace exact text in an existing story chapter. Ambiguous matches fail unless `replace_all: true`. |
 | `edit_lore` | Replace exact text in an existing lore page. Ambiguous matches fail unless `replace_all: true`. |
-| `add_timeline_event` | Add and sort a timeline event. |
-| `remove_timeline_event` | Remove the single event matching an exact event name. |
-| `edit_timeline_event` | Edit an exact event and sort the result. |
+| `read_timeline` | Read timeline rows with row index, date, time, event, lore path, and a short row SHA event id. |
+| `edit_timeline` | Add timeline events and remove timeline rows by event id, then sort the result. |
 | `select_range` | Open a story/lore file and select an exact visible text occurrence. |
 | `get_summary` | Generate or return a cached file summary. |
 | `view_image` | Inspect an image under `assets/` and return a concise visual description. |
