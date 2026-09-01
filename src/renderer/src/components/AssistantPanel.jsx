@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { FiClock, FiPlus, FiTrash2 } from 'react-icons/fi'
+import { FiClock, FiPlus, FiSquare, FiTrash2 } from 'react-icons/fi'
 import remarkGfm from 'remark-gfm'
 import {
   Box,
@@ -68,7 +68,9 @@ export default function AssistantPanel({
   const [keyInput, setKeyInput] = useState('')
   const [keyError, setKeyError] = useState('')
   const [keySaving, setKeySaving] = useState(false)
+  const messagesRef = useRef(null)
   const endRef = useRef(null)
+  const autoScrollRef = useRef(true)
   const restorationCompleteRef = useRef(false)
   const activeChatRef = useRef(null)
   const onConversationChangeRef = useRef(onConversationChange)
@@ -79,8 +81,16 @@ export default function AssistantPanel({
   }, [onConversationChange])
 
   useEffect(() => {
+    if (!autoScrollRef.current) return
     endRef.current?.scrollIntoView({ block: 'end' })
   }, [messages, busy])
+
+  const updateAutoScroll = () => {
+    const container = messagesRef.current
+    if (!container) return
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight
+    autoScrollRef.current = distanceFromBottom < 48
+  }
 
   useEffect(() => {
     return window.storywriter.onAiChatEvent?.(event => {
@@ -130,6 +140,7 @@ export default function AssistantPanel({
         const conversation = await window.storywriter.readAiConversation(targetId)
         if (cancelled) return
         restorationCompleteRef.current = true
+        autoScrollRef.current = true
         const agentAvailable = agents.some(agent => agent.path === conversation.agentPath)
         setSelectedAgent(agentAvailable ? conversation.agentPath : '')
         setConversationId(conversation.id)
@@ -145,6 +156,7 @@ export default function AssistantPanel({
               const conversation = await window.storywriter.readAiConversation(fallbackId)
               if (cancelled) return
               restorationCompleteRef.current = true
+              autoScrollRef.current = true
               const agentAvailable = agents.some(agent => agent.path === conversation.agentPath)
               setSelectedAgent(agentAvailable ? conversation.agentPath : '')
               setConversationId(conversation.id)
@@ -173,9 +185,11 @@ export default function AssistantPanel({
     const requestId = crypto.randomUUID()
     const withUserMessage = [...messages, { role: 'user', text: message }]
     activeChatRef.current = { requestId, messages: [...withUserMessage] }
+    autoScrollRef.current = true
     setMessages(withUserMessage)
     try {
       await onBeforeSend?.()
+      if (activeChatRef.current?.requestId !== requestId || activeChatRef.current.cancelled) return
       const response = await window.storywriter.sendAiMessage({
         requestId,
         message,
@@ -192,10 +206,10 @@ export default function AssistantPanel({
         ? activeChatRef.current.messages
         : withUserMessage
       const completedMessages = liveMessages
-        .filter(item => item.role !== 'assistant')
+        .filter(item => !(item.role === 'assistant' && item.streaming))
         .map(item => ({ role: item.role, text: item.text }))
       if (!completedMessages.some(item => item.role === 'tool')) completedMessages.push(...toolMessages)
-      completedMessages.push({ role: 'assistant', text: response.text })
+      if (String(response.text || '').trim()) completedMessages.push({ role: 'assistant', text: response.text })
       setMessages(completedMessages)
       const saved = await window.storywriter.saveAiConversation({
         id: conversationId,
@@ -212,6 +226,13 @@ export default function AssistantPanel({
       if (activeChatRef.current?.requestId === requestId) activeChatRef.current = null
       setBusy(false)
     }
+  }
+
+  const stop = () => {
+    const active = activeChatRef.current
+    if (active) active.cancelled = true
+    const requestId = active?.requestId
+    if (requestId) void window.storywriter.cancelAiMessage(requestId)
   }
 
   const openHistory = async () => {
@@ -233,6 +254,7 @@ export default function AssistantPanel({
     try {
       const conversation = await window.storywriter.readAiConversation(id)
       const agentAvailable = agents.some(agent => agent.path === conversation.agentPath)
+      autoScrollRef.current = true
       setSelectedAgent(agentAvailable ? conversation.agentPath : '')
       setConversationId(conversation.id)
       setMessages(conversation.messages)
@@ -292,6 +314,7 @@ export default function AssistantPanel({
           disabled={busy || !agents.length}
           onChange={event => {
             restorationCompleteRef.current = true
+            autoScrollRef.current = true
             setSelectedAgent(event.target.value)
             setMessages([])
             setConversationId(null)
@@ -323,13 +346,14 @@ export default function AssistantPanel({
           title="New conversation"
           onClick={() => {
             restorationCompleteRef.current = true
+            autoScrollRef.current = true
             setMessages([])
             setConversationId(null)
             onConversationChange(null)
           }}
         ><FiPlus size={iconSize} /></IconButton>
       </Box>
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', p: 1 }}>
+      <Box ref={messagesRef} onScroll={updateAutoScroll} sx={{ flex: 1, minHeight: 0, overflowY: 'auto', p: 1 }}>
         {configured === false && (
           <Box sx={{ display: 'grid', justifyItems: 'start', gap: 1 }}>
             <Typography variant="body2" color="text.secondary">No OpenAI API key is configured.</Typography>
@@ -397,6 +421,14 @@ export default function AssistantPanel({
             }
           }}
         />
+        <IconButton
+          size="small"
+          disabled={!busy}
+          aria-label="Stop generation"
+          title="Stop generation"
+          onClick={stop}
+          sx={{ width: 34, height: 34, borderRadius: 1 }}
+        ><FiSquare size={iconSize} /></IconButton>
       </Box>
       <Dialog open={historyOpen} onClose={() => setHistoryOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>Conversations</DialogTitle>

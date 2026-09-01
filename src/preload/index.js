@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('storywriter', {
   getAiStatus: () => ipcRenderer.invoke('ai:status'),
   setOpenAiKey: key => ipcRenderer.invoke('ai:key:set', key),
   sendAiMessage: payload => ipcRenderer.invoke('ai:chat', payload),
+  cancelAiMessage: requestId => ipcRenderer.invoke('ai:chat:cancel', requestId),
   onAiChatEvent: callback => {
     const listener = (_event, payload) => callback(payload)
     ipcRenderer.on('ai:chat-event', listener)

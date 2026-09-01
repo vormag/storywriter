@@ -39,6 +39,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const preloadPath = path.join(__dirname, '../preload/index.cjs')
 const rendererHtml = path.join(__dirname, '../renderer/index.html')
 let mainWindow = null
+const activeAiRequests = new Map()
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'storywriter-asset', privileges: { standard: true, secure: true, supportFetchAPI: true } }
@@ -49,9 +50,20 @@ function registerIpc() {
   ipcMain.handle('ai:key:set', (_event, key) => setOpenAiKey(key))
   ipcMain.handle('ai:chat', (event, payload) => {
     const requestId = String(payload?.requestId || '')
+    const controller = new AbortController()
+    if (requestId) activeAiRequests.set(requestId, controller)
     return sendAiMessage(payload, {
+      signal: controller.signal,
       onEvent: update => event.sender.send('ai:chat-event', { ...update, requestId })
+    }).finally(() => {
+      if (requestId && activeAiRequests.get(requestId) === controller) activeAiRequests.delete(requestId)
     })
+  })
+  ipcMain.handle('ai:chat:cancel', (_event, requestId) => {
+    const controller = activeAiRequests.get(String(requestId || ''))
+    if (!controller) return { cancelled: false }
+    controller.abort()
+    return { cancelled: true }
   })
   ipcMain.handle('ai:conversations:list', () => listAiConversations())
   ipcMain.handle('ai:conversations:read', (_event, id) => readAiConversation(id))

@@ -71,6 +71,10 @@ function createResponseParams({ model, reasoning, instructions, editorContext, i
   }
 }
 
+function isAbortError(error) {
+  return error?.name === 'AbortError' || error?.code === 'ABORT_ERR'
+}
+
 export async function sendAiMessage(payload = {}, options = {}) {
   const apiKey = await getOpenAiKey()
   if (!apiKey) throw new Error('No OpenAI API key is configured.')
@@ -111,20 +115,37 @@ export async function sendAiMessage(payload = {}, options = {}) {
   const emit = typeof options.onEvent === 'function' ? options.onEvent : () => {}
 
   for (let turn = 0; turn < 50; turn += 1) {
-    const stream = await client.responses.create({
-      ...createResponseParams({ model, reasoning, instructions, editorContext, input, tools }),
-      stream: true
-    })
+    if (options.signal?.aborted) return { text: text.trim(), model, toolEvents, cancelled: true }
+    let stream
+    try {
+      stream = await client.responses.create({
+        ...createResponseParams({ model, reasoning, instructions, editorContext, input, tools }),
+        stream: true
+      }, { signal: options.signal })
+    } catch (error) {
+      if (isAbortError(error) || options.signal?.aborted) {
+        return { text: text.trim(), model, toolEvents, cancelled: true }
+      }
+      throw error
+    }
     let response = null
 
-    for await (const event of stream) {
-      if (event.type === 'response.output_text.delta' && event.delta) {
-        text += event.delta
-        emit({ type: 'delta', text: event.delta })
-      } else if (event.type === 'response.completed') {
-        response = event.response
+    try {
+      for await (const event of stream) {
+        if (event.type === 'response.output_text.delta' && event.delta) {
+          text += event.delta
+          emit({ type: 'delta', text: event.delta })
+        } else if (event.type === 'response.completed') {
+          response = event.response
+        }
       }
+    } catch (error) {
+      if (isAbortError(error) || options.signal?.aborted) {
+        return { text: text.trim(), model, toolEvents, cancelled: true }
+      }
+      throw error
     }
+    if (options.signal?.aborted) return { text: text.trim(), model, toolEvents, cancelled: true }
     if (!response) throw new Error('OpenAI stream ended without a completed response.')
 
     const calls = response.output.filter(item => item.type === 'function_call')
@@ -137,6 +158,7 @@ export async function sendAiMessage(payload = {}, options = {}) {
 
     input.push(...response.output)
     for (const call of calls) {
+      if (options.signal?.aborted) return { text: text.trim(), model, toolEvents, cancelled: true }
       let output
       let args = {}
       try {
@@ -149,6 +171,7 @@ export async function sendAiMessage(payload = {}, options = {}) {
       const toolEvent = { role: 'tool', text: summarizeToolCall(call.name, args, output) }
       toolEvents.push(toolEvent)
       emit({ type: 'tool', message: toolEvent })
+      if (options.signal?.aborted) return { text: text.trim(), model, toolEvents, cancelled: true }
       input.push({
         type: 'function_call_output',
         call_id: call.call_id,
@@ -169,21 +192,55 @@ function normalizeConversationMessages(messages) {
     : []
 }
 
+function sameConversationMessage(left, right) {
+  return left?.role === right?.role && left?.text === right?.text
+}
+
+function mergeConversationMessages(existingMessages, incomingMessages) {
+  if (!existingMessages.length) return incomingMessages
+
+  const merged = []
+  let existingIndex = 0
+
+  for (const incoming of incomingMessages) {
+    const matchIndex = existingMessages.findIndex((existing, index) => (
+      index >= existingIndex && sameConversationMessage(existing, incoming)
+    ))
+
+    if (matchIndex >= 0) {
+      merged.push(...existingMessages.slice(existingIndex, matchIndex), incoming)
+      existingIndex = matchIndex + 1
+    } else {
+      merged.push(...existingMessages.slice(existingIndex), incoming)
+      existingIndex = existingMessages.length
+    }
+  }
+
+  merged.push(...existingMessages.slice(existingIndex))
+  return normalizeConversationMessages(merged)
+}
+
 export async function saveAiConversation(payload = {}) {
   const agentPath = normalizeRelative(payload.agentPath)
   if (!/^agents\/[^/]+\.json$/i.test(agentPath)) throw new Error('Select an agent first.')
   const agent = await readJson(resolveProjectPath(agentPath), null)
   if (!agent) throw new Error('The selected agent no longer exists.')
 
-  const messages = normalizeConversationMessages(payload.messages)
-  if (!messages.length) return null
-  if (messages.reduce((length, item) => length + item.text.length, 0) > 500000) {
-    throw new Error('This conversation is too long to save.')
-  }
+  const incomingMessages = normalizeConversationMessages(payload.messages)
+  if (!incomingMessages.length) return null
 
   const id = payload.id ? validateConversationId(payload.id) : randomUUID()
   const target = resolveProjectPath(`${CONVERSATIONS_DIRECTORY}/${id}.json`)
   const existing = await readJson(target, null)
+  const existingMessages = normalizeConversationMessages(existing?.messages)
+  const messages = payload.id
+    ? mergeConversationMessages(existingMessages, incomingMessages)
+    : incomingMessages
+
+  if (messages.reduce((length, item) => length + item.text.length, 0) > 500000) {
+    throw new Error('This conversation is too long to save.')
+  }
+
   const now = new Date().toISOString()
   const firstUserMessage = messages.find(item => item.role === 'user')?.text || 'Conversation'
   const conversation = {
