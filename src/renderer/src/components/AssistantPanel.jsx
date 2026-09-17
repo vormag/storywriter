@@ -195,7 +195,7 @@ export default function AssistantPanel({
         message,
         agentPath: selectedAgent,
         editorContext,
-        history: messages.filter(item => item.role === 'user' || item.role === 'assistant')
+        history: messages
       })
       const toolMessages = Array.isArray(response.toolEvents)
         ? response.toolEvents
@@ -207,9 +207,21 @@ export default function AssistantPanel({
         : withUserMessage
       const completedMessages = liveMessages
         .filter(item => !(item.role === 'assistant' && item.streaming))
-        .map(item => ({ role: item.role, text: item.text }))
+        .map(item => {
+          const completed = { role: item.role, text: item.text }
+          if (item.role === 'assistant' && Array.isArray(item.responseItems)) {
+            completed.responseItems = item.responseItems
+          }
+          return completed
+        })
       if (!completedMessages.some(item => item.role === 'tool')) completedMessages.push(...toolMessages)
-      if (String(response.text || '').trim()) completedMessages.push({ role: 'assistant', text: response.text })
+      if (String(response.text || '').trim()) {
+        completedMessages.push({
+          role: 'assistant',
+          text: response.text,
+          responseItems: Array.isArray(response.responseItems) ? response.responseItems : []
+        })
+      }
       setMessages(completedMessages)
       const saved = await window.storywriter.saveAiConversation({
         id: conversationId,

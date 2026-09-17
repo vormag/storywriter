@@ -1,11 +1,12 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import OpenAI from 'openai'
+import { toResponseInputItems } from 'openai/lib/responses/ResponseInputItems.mjs'
 import { CONVERSATIONS_DIRECTORY } from './constants.js'
 import { executeAiTool, getAiToolDefinitions } from './aiTools.js'
 import { getOpenAiKey, getOpenAiStatus } from './credentialService.js'
-import { resolveProjectPath } from './projectService.js'
+import { getActiveRoot, resolveProjectPath } from './projectService.js'
 import { atomicWrite, readJson } from './storage.js'
 import { normalizeRelative, validateConversationId } from './utils.js'
 
@@ -60,13 +61,23 @@ export async function getAiStatus() {
   return getOpenAiStatus()
 }
 
-function createResponseParams({ model, reasoning, instructions, editorContext, input, tools }) {
+function promptCacheKey(agentPath) {
+  return createHash('sha256')
+    .update(`${getActiveRoot()}\n${agentPath}`)
+    .digest('hex')
+}
+
+function createResponseParams({ model, reasoning, instructions, editorContext, input, tools, agentPath }) {
   return {
     model,
     reasoning: { effort: reasoning },
     instructions: [instructions, editorContext].filter(Boolean).join('\n\n'),
     input,
+    include: ['reasoning.encrypted_content'],
     tools: tools.length ? tools : undefined,
+    prompt_cache_key: promptCacheKey(agentPath),
+    prompt_cache_options: { mode: 'implicit', ttl: '30m' },
+    prompt_cache_retention: '24h',
     store: false
   }
 }
@@ -95,14 +106,8 @@ export async function sendAiMessage(payload = {}, options = {}) {
   if (!model || model.length > 100) throw new Error('The selected agent has an invalid model.')
   if (!REASONING_LEVELS.has(reasoning)) throw new Error('The selected agent has an invalid reasoning level.')
 
-  const history = Array.isArray(payload.history)
-    ? payload.history
-      .filter(item => item?.role === 'user' || item?.role === 'assistant')
-      .slice(-50)
-      .map(item => ({ role: item.role, content: String(item.text ?? '').slice(0, 20000) }))
-      .filter(item => item.content.trim())
-    : []
-  if (history.reduce((length, item) => length + item.content.length, 0) > 200000) {
+  const history = buildResponseHistory(payload.history)
+  if (JSON.stringify(history).length > 500000) {
     throw new Error('This conversation is too long. Clear it before continuing.')
   }
 
@@ -111,6 +116,7 @@ export async function sendAiMessage(payload = {}, options = {}) {
   const enabledTools = new Set(tools.map(tool => tool.name))
   const input = [...history, { role: 'user', content: message }]
   const toolEvents = []
+  const responseItems = []
   let text = ''
   const emit = typeof options.onEvent === 'function' ? options.onEvent : () => {}
 
@@ -119,7 +125,7 @@ export async function sendAiMessage(payload = {}, options = {}) {
     let stream
     try {
       stream = await client.responses.create({
-        ...createResponseParams({ model, reasoning, instructions, editorContext, input, tools }),
+        ...createResponseParams({ model, reasoning, instructions, editorContext, input, tools, agentPath }),
         stream: true
       }, { signal: options.signal })
     } catch (error) {
@@ -148,15 +154,18 @@ export async function sendAiMessage(payload = {}, options = {}) {
     if (options.signal?.aborted) return { text: text.trim(), model, toolEvents, cancelled: true }
     if (!response) throw new Error('OpenAI stream ended without a completed response.')
 
-    const calls = response.output.filter(item => item.type === 'function_call')
+    const outputItems = toResponseInputItems(response.output)
+    responseItems.push(...outputItems)
+
+    const calls = outputItems.filter(item => item.type === 'function_call')
     if (!calls.length) {
       text = text || response.output_text || ''
       if (!text.trim()) throw new Error('OpenAI returned an empty response.')
       emit({ type: 'done', text })
-      return { text: text.trim(), model, toolEvents }
+      return { text: text.trim(), model, toolEvents, responseItems }
     }
 
-    input.push(...response.output)
+    input.push(...outputItems)
     for (const call of calls) {
       if (options.signal?.aborted) return { text: text.trim(), model, toolEvents, cancelled: true }
       let output
@@ -172,14 +181,43 @@ export async function sendAiMessage(payload = {}, options = {}) {
       toolEvents.push(toolEvent)
       emit({ type: 'tool', message: toolEvent })
       if (options.signal?.aborted) return { text: text.trim(), model, toolEvents, cancelled: true }
-      input.push({
+      const functionOutput = {
         type: 'function_call_output',
         call_id: call.call_id,
         output: JSON.stringify(output)
-      })
+      }
+      responseItems.push(functionOutput)
+      input.push(functionOutput)
     }
   }
   throw new Error('The agent exceeded the maximum number of tool steps.')
+}
+
+function buildResponseHistory(messages) {
+  if (!Array.isArray(messages)) return []
+  const history = []
+  for (const item of messages.slice(-100)) {
+    if (item?.role === 'user') {
+      const content = String(item.text ?? '').slice(0, 50000)
+      if (content.trim()) history.push({ role: 'user', content })
+    } else if (item?.role === 'assistant') {
+      const responseItems = normalizeResponseItems(item.responseItems)
+      if (responseItems.length) {
+        history.push(...toResponseInputItems(responseItems))
+      } else {
+        const content = String(item.text ?? '').slice(0, 50000)
+        if (content.trim()) history.push({ role: 'assistant', content })
+      }
+    }
+  }
+  return history
+}
+
+function normalizeResponseItems(items) {
+  if (!Array.isArray(items)) return []
+  return items
+    .filter(item => item && typeof item === 'object' && typeof item.type === 'string')
+    .slice(-200)
 }
 
 function normalizeConversationMessages(messages) {
@@ -187,37 +225,14 @@ function normalizeConversationMessages(messages) {
     ? messages
       .filter(item => item?.role === 'user' || item?.role === 'assistant' || item?.role === 'tool')
       .slice(-100)
-      .map(item => ({ role: item.role, text: String(item.text ?? '').slice(0, 50000) }))
+      .map(item => {
+        const message = { role: item.role, text: String(item.text ?? '').slice(0, 50000) }
+        const responseItems = item.role === 'assistant' ? normalizeResponseItems(item.responseItems) : []
+        if (responseItems.length) message.responseItems = responseItems
+        return message
+      })
       .filter(item => item.text.trim())
     : []
-}
-
-function sameConversationMessage(left, right) {
-  return left?.role === right?.role && left?.text === right?.text
-}
-
-function mergeConversationMessages(existingMessages, incomingMessages) {
-  if (!existingMessages.length) return incomingMessages
-
-  const merged = []
-  let existingIndex = 0
-
-  for (const incoming of incomingMessages) {
-    const matchIndex = existingMessages.findIndex((existing, index) => (
-      index >= existingIndex && sameConversationMessage(existing, incoming)
-    ))
-
-    if (matchIndex >= 0) {
-      merged.push(...existingMessages.slice(existingIndex, matchIndex), incoming)
-      existingIndex = matchIndex + 1
-    } else {
-      merged.push(...existingMessages.slice(existingIndex), incoming)
-      existingIndex = existingMessages.length
-    }
-  }
-
-  merged.push(...existingMessages.slice(existingIndex))
-  return normalizeConversationMessages(merged)
 }
 
 export async function saveAiConversation(payload = {}) {
@@ -232,19 +247,16 @@ export async function saveAiConversation(payload = {}) {
   const id = payload.id ? validateConversationId(payload.id) : randomUUID()
   const target = resolveProjectPath(`${CONVERSATIONS_DIRECTORY}/${id}.json`)
   const existing = await readJson(target, null)
-  const existingMessages = normalizeConversationMessages(existing?.messages)
-  const messages = payload.id
-    ? mergeConversationMessages(existingMessages, incomingMessages)
-    : incomingMessages
+  const messages = incomingMessages
 
-  if (messages.reduce((length, item) => length + item.text.length, 0) > 500000) {
+  if (JSON.stringify(messages).length > 2000000) {
     throw new Error('This conversation is too long to save.')
   }
 
   const now = new Date().toISOString()
   const firstUserMessage = messages.find(item => item.role === 'user')?.text || 'Conversation'
   const conversation = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id,
     title: firstUserMessage.replace(/\s+/g, ' ').trim().slice(0, 80),
     agentPath,
