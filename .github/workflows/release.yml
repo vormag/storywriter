@@ -58,14 +58,14 @@ jobs:
             artifact: storywriter-windows
             files: dist/*.exe
           - label: macOS ARM
-            os: macos-14
+            os: macos-15
             command: dist:mac:arm
             artifact: storywriter-macos-arm
             files: |
               dist/*.dmg
               dist/*.zip
           - label: macOS Universal
-            os: macos-14
+            os: macos-15
             command: dist:mac:universal
             artifact: storywriter-macos-universal
             files: |
