@@ -1,5 +1,6 @@
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
+import remarkGfm from 'remark-gfm'
 
 function textOf(node) {
   if (node.type === 'text' || node.type === 'inlineCode' || node.type === 'code') return node.value || ''
@@ -43,6 +44,8 @@ function inlineNodes(nodes, marks = [], resolveImageSrc) {
         return inlineNodes(node.children, [...marks, { type: 'bold' }], resolveImageSrc)
       case 'emphasis':
         return inlineNodes(node.children, [...marks, { type: 'italic' }], resolveImageSrc)
+      case 'delete':
+        return inlineNodes(node.children, [...marks, { type: 'strike' }], resolveImageSrc)
       case 'inlineCode':
         return node.value ? [{ type: 'text', text: node.value, marks: [...marks, { type: 'code' }] }] : []
       case 'link':
@@ -64,6 +67,18 @@ function inlineNodes(nodes, marks = [], resolveImageSrc) {
 
 function blockNode(node, resolveImageSrc) {
   switch (node.type) {
+    case 'table':
+      return {
+        type: 'table',
+        content: (node.children || []).map((row, rowIndex) => ({
+          type: 'tableRow',
+          content: (row.children || []).map((cell, columnIndex) => ({
+            type: rowIndex === 0 ? 'tableHeader' : 'tableCell',
+            attrs: { align: node.align?.[columnIndex] || null },
+            content: [{ type: 'paragraph', content: inlineNodes(cell.children, [], resolveImageSrc) }]
+          }))
+        }))
+      }
     case 'heading':
       return { type: 'heading', attrs: { level: node.depth }, content: inlineNodes(node.children, [], resolveImageSrc) }
     case 'paragraph':
@@ -107,7 +122,7 @@ function blockNode(node, resolveImageSrc) {
 }
 
 export function markdownToDocument(markdown, options = {}) {
-  const tree = unified().use(remarkParse).parse(String(markdown || ''))
+  const tree = unified().use(remarkParse).use(remarkGfm).parse(String(markdown || ''))
   const content = (tree.children || []).map(node => blockNode(node, options.resolveImageSrc)).filter(Boolean)
   return { type: 'doc', content: content.length ? content : [{ type: 'paragraph' }] }
 }
@@ -133,6 +148,7 @@ function serializeInline(nodes = []) {
       else if (bold) value = `**${value}**`
       else if (italic) value = `*${value}*`
     }
+    if (marks.some(mark => mark.type === 'strike')) value = `~~${value}~~`
     const link = marks.find(mark => mark.type === 'link')
     if (link) value = `[${value}](${link.attrs?.href || ''})`
     return value
@@ -154,6 +170,21 @@ function serializeList(node, depth = 0) {
 
 function serializeBlock(node, depth = 0) {
   switch (node.type) {
+    case 'table': {
+      const rows = node.content || []
+      if (!rows.length) return ''
+      const width = rows[0].content?.length || 0
+      if (!width) return ''
+      const rowText = row => `| ${Array.from({ length: width }, (_, index) => {
+        const cell = row.content?.[index]
+        return (cell?.content || []).map(block => serializeInline(block.content)).join(' ').replaceAll('|', '\\|').replace(/\s*\n\s*/g, ' ')
+      }).join(' | ')} |`
+      const delimiter = `| ${rows[0].content.map(cell => {
+        const align = cell.attrs?.align
+        return align === 'center' ? ':---:' : align === 'right' ? '---:' : align === 'left' ? ':---' : '---'
+      }).join(' | ')} |`
+      return [rowText(rows[0]), delimiter, ...rows.slice(1).map(rowText)].join('\n')
+    }
     case 'paragraph':
       return serializeInline(node.content)
     case 'heading':

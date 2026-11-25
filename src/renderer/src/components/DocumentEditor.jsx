@@ -33,7 +33,7 @@ import {
   Typography
 } from '@mui/material'
 import { documentToMarkdown, markdownToDocument } from '../editor/markdownAdapter'
-import { StoryImage, StoryPageBreak } from '../editor/storyExtensions'
+import { StoryImage, StoryPageBreak, StoryTableExtensions } from '../editor/storyExtensions'
 
 const A4 = { width: 794, height: 1123 }
 const LETTER = { width: 816, height: 1056 }
@@ -368,6 +368,7 @@ export default function DocumentEditor({
     }),
     StoryPageBreak,
     StoryImage,
+    ...StoryTableExtensions,
     PaginationPlus.configure({
       enabled: true,
       pageWidth: format.width,

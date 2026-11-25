@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { generateHTML } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import { markdownToDocument } from '../editor/markdownAdapter'
-import { StoryImage, StoryPageBreak } from '../editor/storyExtensions'
+import { StoryImage, StoryPageBreak, StoryTableExtensions } from '../editor/storyExtensions'
 
 const PAGE_SIZES = {
   A4: { width: 794, height: 1123 },
@@ -13,7 +13,8 @@ const mmToPixels = value => Math.round((Number(value) || 0) * 96 / 25.4)
 const extensions = [
   StarterKit.configure({ link: { openOnClick: false } }),
   StoryPageBreak,
-  StoryImage
+  StoryImage,
+  ...StoryTableExtensions
 ]
 
 function normalizeProjectPath(value) {
@@ -121,6 +122,9 @@ export default function PdfExportView() {
     .pdf-document blockquote { margin: 0 0 0.75em; padding-left: 0.9em; color: #555; border-left: 3px solid #c8c8c8; }
     .pdf-document pre { margin: 0 0 0.75em; padding: 0.65em 0.8em; overflow: hidden; background: #f3f3f3; border-radius: 3px; font-family: Consolas, monospace; }
     .pdf-document code { font-family: Consolas, monospace; }
+    .pdf-document table { width: 100%; border-collapse: collapse; margin: 0 0 0.75em; }
+    .pdf-document th, .pdf-document td { border: 1px solid #aaa; padding: 0.3em 0.5em; vertical-align: top; }
+    .pdf-document table p { margin: 0; text-align: inherit; }
     .pdf-document a { color: #1565c0; text-decoration: underline; }
     .pdf-document .story-image { display: block; width: 100%; margin: 0 0 0.75em; text-align: center; }
     .pdf-document .story-image[data-align="left"] { text-align: left; }

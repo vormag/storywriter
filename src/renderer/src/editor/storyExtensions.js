@@ -1,4 +1,20 @@
 import { Node } from '@tiptap/core'
+import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table'
+
+const alignedCell = extension => extension.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      align: {
+        default: null,
+        parseHTML: element => element.style.textAlign || null,
+        renderHTML: attributes => attributes.align ? { style: `text-align: ${attributes.align}` } : {}
+      }
+    }
+  }
+})
+
+export const StoryTableExtensions = [Table, TableRow, alignedCell(TableCell), alignedCell(TableHeader)]
 
 export const StoryPageBreak = Node.create({
   name: 'storyPageBreak',

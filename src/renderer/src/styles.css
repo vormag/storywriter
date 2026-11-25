@@ -343,3 +343,18 @@ html[data-pdf-export] body {
     grid-template-columns: 120px minmax(180px, 1fr) 170px 32px;
   }
 }
+
+/* Keep table rows in normal flow so pagination's floating page gaps can
+   separate them without pushing the entire table past every page gap. */
+.tiptap-editor-scale .ProseMirror table { display: block; width: 100%; margin: 0 0 0.75em; }
+.tiptap-editor-scale .ProseMirror table tbody { display: block; max-height: none; overflow: visible; }
+.tiptap-editor-scale .ProseMirror table tbody > tr { display: flex !important; width: 100%; }
+.tiptap-editor-scale .ProseMirror table th,
+.tiptap-editor-scale .ProseMirror table td { flex: 1 1 0; min-width: 0; }
+.tiptap-editor-scale .ProseMirror th,
+.tiptap-editor-scale .ProseMirror td { border: 1px solid #aaa; padding: 0.3em 0.5em; vertical-align: top; overflow-wrap: anywhere; }
+.tiptap-editor-scale .ProseMirror table tr > :not(:first-child) { border-left: 0; }
+.tiptap-editor-scale .ProseMirror table tr:not(:last-child) > * { border-bottom: 0; }
+.tiptap-editor-scale .ProseMirror table tr:not(:last-child) { border-bottom: 1px solid #aaa; margin-bottom: -1px; }
+.tiptap-editor-scale .ProseMirror table p { margin: 0; text-align: inherit; }
+.tiptap-editor-scale .ProseMirror .selectedCell { background: rgba(100, 140, 200, 0.2); }
